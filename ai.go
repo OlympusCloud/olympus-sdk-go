@@ -18,9 +18,19 @@ type AIService struct {
 }
 
 // QueryOptions holds optional parameters for a single-turn AI query.
+//
+// RequiredCapabilities activates capability-based routing (#2919). Non-text
+// values bypass the text tier selector and route to the cheapest model in
+// the Ether catalog matching the capabilities. Values: text, vision,
+// audio_in, audio_out, audio_live, video_in, video_generation, video_live,
+// image_generation, embedding, reasoning, agentic_coding, world_model,
+// robotics_control, medical_specialist, legal_specialist,
+// financial_specialist, scientific_specialist, function_calling,
+// structured_output, long_context.
 type QueryOptions struct {
-	Tier    string                 `json:"tier,omitempty"`
-	Context map[string]interface{} `json:"context,omitempty"`
+	Tier                 string                 `json:"tier,omitempty"`
+	Context              map[string]interface{} `json:"context,omitempty"`
+	RequiredCapabilities []string               `json:"required_capabilities,omitempty"`
 }
 
 // Query sends a single-turn prompt to the AI gateway.
@@ -37,8 +47,89 @@ func (s *AIService) Query(ctx context.Context, prompt string, opts *QueryOptions
 		if opts.Context != nil {
 			body["context"] = opts.Context
 		}
+		if len(opts.RequiredCapabilities) > 0 {
+			body["required_capabilities"] = opts.RequiredCapabilities
+		}
 	}
 
+	resp, err := s.http.post(ctx, "/ai/chat", body)
+	if err != nil {
+		return nil, err
+	}
+	return parseAIResponse(resp), nil
+}
+
+// GenerateImageOptions holds optional parameters for image generation.
+type GenerateImageOptions struct {
+	PreferredProvider string `json:"preferred_provider,omitempty"`
+}
+
+// GenerateImage creates an image from a text prompt via the cheapest matching
+// provider in the Ether catalog (Flux Schnell free, DALL-E 3, Imagen 4).
+// Returns a raw map with image_url or image_b64 depending on provider.
+func (s *AIService) GenerateImage(ctx context.Context, prompt string, opts *GenerateImageOptions) (map[string]interface{}, error) {
+	body := map[string]interface{}{
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+		"required_capabilities": []string{"image_generation"},
+	}
+	if opts != nil && opts.PreferredProvider != "" {
+		body["preferred_provider"] = opts.PreferredProvider
+	}
+	return s.http.post(ctx, "/ai/chat", body)
+}
+
+// GenerateVideoOptions holds optional parameters for video generation.
+type GenerateVideoOptions struct {
+	DurationSeconds   int    `json:"duration_seconds,omitempty"`
+	PreferredProvider string `json:"preferred_provider,omitempty"`
+}
+
+// GenerateVideo creates a video from a text prompt (Veo / Kling / Pika / Luma / Hailuo).
+// Returns async job reference — poll /ai/video-jobs/{id} for completion.
+func (s *AIService) GenerateVideo(ctx context.Context, prompt string, opts *GenerateVideoOptions) (map[string]interface{}, error) {
+	body := map[string]interface{}{
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+		"required_capabilities": []string{"video_generation"},
+	}
+	if opts != nil {
+		if opts.DurationSeconds > 0 {
+			body["duration_seconds"] = opts.DurationSeconds
+		}
+		if opts.PreferredProvider != "" {
+			body["preferred_provider"] = opts.PreferredProvider
+		}
+	}
+	return s.http.post(ctx, "/ai/chat", body)
+}
+
+// SpecialistQuery calls a vertical specialist model (medical/legal/financial/scientific).
+// Routes to Med-Gemini, Harvey, BloombergGPT, ESM-3, etc. based on the
+// specialty flag. Valid values: "medical", "legal", "financial", "scientific".
+// systemContext is an optional domain-specific system prompt.
+func (s *AIService) SpecialistQuery(ctx context.Context, prompt, specialty, systemContext string) (*AIResponse, error) {
+	capMap := map[string]string{
+		"medical":    "medical_specialist",
+		"legal":      "legal_specialist",
+		"financial":  "financial_specialist",
+		"scientific": "scientific_specialist",
+	}
+	capName, ok := capMap[specialty]
+	if !ok {
+		return nil, fmt.Errorf("olympus-sdk: unknown specialty %q; must be one of medical/legal/financial/scientific", specialty)
+	}
+	messages := []map[string]string{}
+	if systemContext != "" {
+		messages = append(messages, map[string]string{"role": "system", "content": systemContext})
+	}
+	messages = append(messages, map[string]string{"role": "user", "content": prompt})
+	body := map[string]interface{}{
+		"messages":              messages,
+		"required_capabilities": []string{"reasoning", capName},
+	}
 	resp, err := s.http.post(ctx, "/ai/chat", body)
 	if err != nil {
 		return nil, err

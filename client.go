@@ -43,8 +43,9 @@ type OlympusClient struct {
 	platform    *PlatformService
 	developer   *DeveloperService
 	business    *BusinessService
-	maximus     *MaximusService
-	pos         *POSService
+	maximus         *MaximusService
+	pos             *POSService
+	agentWorkflows  *AgentWorkflowsService
 }
 
 // NewClient creates a new Olympus Cloud SDK client with the given configuration.
@@ -212,6 +213,16 @@ func (c *OlympusClient) POS() *POSService {
 		c.pos = &POSService{http: c.http}
 	}
 	return c.pos
+}
+
+// AgentWorkflows returns the AI Agent Workflow Orchestration service (#2915).
+// Provides tenant-scoped multi-agent DAG pipelines with cron/event triggers,
+// capability routing, and billing. Distinct from marketplace workflows.
+func (c *OlympusClient) AgentWorkflows() *AgentWorkflowsService {
+	if c.agentWorkflows == nil {
+		c.agentWorkflows = &AgentWorkflowsService{http: c.http}
+	}
+	return c.agentWorkflows
 }
 
 // Config returns the active SDK configuration.
