@@ -21,7 +21,7 @@
 package olympus
 
 // OlympusClient is the main entry point for the Olympus Cloud SDK.
-// It provides typed access to 19 platform services.
+// It provides typed access to 22 platform services.
 type OlympusClient struct {
 	config *Config
 	http   *httpClient
@@ -43,9 +43,12 @@ type OlympusClient struct {
 	platform    *PlatformService
 	developer   *DeveloperService
 	business    *BusinessService
-	maximus         *MaximusService
-	pos             *POSService
-	agentWorkflows  *AgentWorkflowsService
+	maximus            *MaximusService
+	pos                *POSService
+	agentWorkflows     *AgentWorkflowsService
+	enterpriseContext  *EnterpriseContextService
+	messages           *MessagesService
+	voiceOrders        *VoiceOrdersService
 }
 
 // NewClient creates a new Olympus Cloud SDK client with the given configuration.
@@ -223,6 +226,33 @@ func (c *OlympusClient) AgentWorkflows() *AgentWorkflowsService {
 		c.agentWorkflows = &AgentWorkflowsService{http: c.http}
 	}
 	return c.agentWorkflows
+}
+
+// EnterpriseContext returns the Company 360 context service for AI agents.
+// Issues #2993
+func (c *OlympusClient) EnterpriseContext() *EnterpriseContextService {
+	if c.enterpriseContext == nil {
+		c.enterpriseContext = &EnterpriseContextService{http: c.http}
+	}
+	return c.enterpriseContext
+}
+
+// Messages returns the message queue and department routing service.
+// Issue #2997
+func (c *OlympusClient) Messages() *MessagesService {
+	if c.messages == nil {
+		c.messages = &MessagesService{http: c.http}
+	}
+	return c.messages
+}
+
+// VoiceOrders returns the voice order placement service.
+// Issue #2999
+func (c *OlympusClient) VoiceOrders() *VoiceOrdersService {
+	if c.voiceOrders == nil {
+		c.voiceOrders = &VoiceOrdersService{http: c.http}
+	}
+	return c.voiceOrders
 }
 
 // Config returns the active SDK configuration.
