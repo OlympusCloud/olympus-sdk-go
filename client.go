@@ -49,6 +49,11 @@ type OlympusClient struct {
 	enterpriseContext  *EnterpriseContextService
 	messages           *MessagesService
 	voiceOrders        *VoiceOrdersService
+	adminEther         *AdminEtherService
+	adminCpaas         *AdminCpaasService
+	adminBilling       *AdminBillingService
+	adminGating        *AdminGatingService
+	tuning             *TuningService
 }
 
 // NewClient creates a new Olympus Cloud SDK client with the given configuration.
@@ -253,6 +258,51 @@ func (c *OlympusClient) VoiceOrders() *VoiceOrdersService {
 		c.voiceOrders = &VoiceOrdersService{http: c.http}
 	}
 	return c.voiceOrders
+}
+
+// AdminEther returns the Ether AI model catalog admin service.
+// Provides CRUD for models and tiers, plus hot-reload of the catalog cache.
+func (c *OlympusClient) AdminEther() *AdminEtherService {
+	if c.adminEther == nil {
+		c.adminEther = &AdminEtherService{http: c.http}
+	}
+	return c.adminEther
+}
+
+// AdminCpaas returns the CPaaS provider configuration and health admin service.
+// Controls Telnyx-primary / Twilio-fallback routing and circuit-breaker health.
+func (c *OlympusClient) AdminCpaas() *AdminCpaasService {
+	if c.adminCpaas == nil {
+		c.adminCpaas = &AdminCpaasService{http: c.http}
+	}
+	return c.adminCpaas
+}
+
+// AdminBilling returns the billing plan catalog and usage metering admin service.
+// Manages the global plan catalog, add-ons, minute packs, and usage recording.
+func (c *OlympusClient) AdminBilling() *AdminBillingService {
+	if c.adminBilling == nil {
+		c.adminBilling = &AdminBillingService{http: c.http}
+	}
+	return c.adminBilling
+}
+
+// AdminGating returns the feature flag and gating admin service.
+// Manages feature definitions, plan-level assignments, resource limits, and evaluation.
+func (c *OlympusClient) AdminGating() *AdminGatingService {
+	if c.adminGating == nil {
+		c.adminGating = &AdminGatingService{http: c.http}
+	}
+	return c.adminGating
+}
+
+// Tuning returns the AI tuning jobs, persona generation, and chaos audio service.
+// Manages model fine-tuning lifecycle, synthetic personas, and noise simulation.
+func (c *OlympusClient) Tuning() *TuningService {
+	if c.tuning == nil {
+		c.tuning = &TuningService{http: c.http}
+	}
+	return c.tuning
 }
 
 // Config returns the active SDK configuration.
