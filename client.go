@@ -54,6 +54,8 @@ type OlympusClient struct {
 	adminBilling       *AdminBillingService
 	adminGating        *AdminGatingService
 	tuning             *TuningService
+	voice              *VoiceService
+	connect            *ConnectService
 }
 
 // NewClient creates a new Olympus Cloud SDK client with the given configuration.
@@ -303,6 +305,24 @@ func (c *OlympusClient) Tuning() *TuningService {
 		c.tuning = &TuningService{http: c.http}
 	}
 	return c.tuning
+}
+
+// Voice returns the Voice Agent V2 cascade resolver + voice-agent service.
+// v0.4.0 — Issues #3162 (V2-005).
+func (c *OlympusClient) Voice() *VoiceService {
+	if c.voice == nil {
+		c.voice = &VoiceService{http: c.http}
+	}
+	return c.voice
+}
+
+// Connect returns the marketing-funnel + pre-conversion lead capture service.
+// v0.4.0 — Issue #3108.
+func (c *OlympusClient) Connect() *ConnectService {
+	if c.connect == nil {
+		c.connect = &ConnectService{http: c.http}
+	}
+	return c.connect
 }
 
 // Config returns the active SDK configuration.
