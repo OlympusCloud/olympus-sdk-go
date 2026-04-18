@@ -20,6 +20,8 @@
 //	resp, err := client.AI().Query(ctx, "What sold best this week?", nil)
 package olympus
 
+import "sync"
+
 // OlympusClient is the main entry point for the Olympus Cloud SDK.
 // It provides typed access to 22 platform services.
 type OlympusClient struct {
@@ -60,6 +62,8 @@ type OlympusClient struct {
 	governance         *GovernanceService
 
 	// Cached decoded JWT claims (lazy; invalidated on token change).
+	// Protected by cacheMu since *OlympusClient is shared across goroutines.
+	cacheMu              sync.RWMutex
 	cachedClaims         map[string]interface{}
 	cachedClaimsForToken string
 	cachedBitset         []byte
@@ -421,21 +425,39 @@ func (c *OlympusClient) IsAppScoped() bool {
 }
 
 func (c *OlympusClient) invalidateBitsetCache() {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
 	c.cachedClaims = nil
 	c.cachedClaimsForToken = ""
 	c.cachedBitset = nil
 	c.cachedBitsetForToken = ""
 }
 
+// decodedClaims returns the parsed JWT claims for the current access token,
+// caching the decode across calls. Safe to call from multiple goroutines.
 func (c *OlympusClient) decodedClaims() map[string]interface{} {
 	token := c.http.GetAccessToken()
 	if token == "" {
 		return nil
 	}
+
+	// Fast path: read-locked hit.
+	c.cacheMu.RLock()
+	if c.cachedClaimsForToken == token && c.cachedClaims != nil {
+		claims := c.cachedClaims
+		c.cacheMu.RUnlock()
+		return claims
+	}
+	c.cacheMu.RUnlock()
+
+	// Miss: parse + take write lock to commit.
+	claims := parseJWTPayload(token)
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	// Double-check under the write lock — another goroutine may have raced us.
 	if c.cachedClaimsForToken == token && c.cachedClaims != nil {
 		return c.cachedClaims
 	}
-	claims := parseJWTPayload(token)
 	if claims != nil {
 		c.cachedClaims = claims
 		c.cachedClaimsForToken = token
@@ -443,19 +465,35 @@ func (c *OlympusClient) decodedClaims() map[string]interface{} {
 	return claims
 }
 
+// decodeBitsetOnce returns the decoded scope bitset for the current access
+// token. Safe to call from multiple goroutines.
 func (c *OlympusClient) decodeBitsetOnce() []byte {
 	token := c.http.GetAccessToken()
 	if token == "" {
 		return nil
 	}
+
+	// Fast path.
+	c.cacheMu.RLock()
 	if c.cachedBitsetForToken == token && c.cachedBitset != nil {
-		return c.cachedBitset
+		bs := c.cachedBitset
+		c.cacheMu.RUnlock()
+		return bs
 	}
+	c.cacheMu.RUnlock()
+
+	// Miss: read claims (which is also cached under the same lock) then decode.
 	claims := c.decodedClaims()
 	if claims == nil {
 		return nil
 	}
 	bitsetStr, _ := claims["app_scopes_bitset"].(string)
+
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.cachedBitsetForToken == token && c.cachedBitset != nil {
+		return c.cachedBitset
+	}
 	if bitsetStr == "" {
 		c.cachedBitset = []byte{}
 		c.cachedBitsetForToken = token

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,12 +22,17 @@ const sdkVersion = "go/0.1.0"
 type StaleCatalogHandler func()
 
 // httpClient is the internal HTTP transport used by all service methods.
+//
+// tokenMu guards mutable token + handler fields so SetAccessToken / SetAppToken /
+// OnCatalogStale are safe to call concurrently with in-flight requests.
 type httpClient struct {
-	config        *Config
-	client        *http.Client
-	baseURL       string
-	accessToken   string
-	appToken      string
+	config  *Config
+	client  *http.Client
+	baseURL string
+
+	tokenMu        sync.RWMutex
+	accessToken    string
+	appToken       string
 	onStaleCatalog StaleCatalogHandler
 }
 
@@ -43,35 +49,47 @@ func newHTTPClient(cfg *Config) *httpClient {
 // SetAccessToken sets the user-scoped access token. When set, it takes
 // precedence over the API key for authentication.
 func (h *httpClient) SetAccessToken(token string) {
+	h.tokenMu.Lock()
 	h.accessToken = token
+	h.tokenMu.Unlock()
 }
 
 // ClearAccessToken removes the user-scoped access token, reverting to API key auth.
 func (h *httpClient) ClearAccessToken() {
+	h.tokenMu.Lock()
 	h.accessToken = ""
+	h.tokenMu.Unlock()
 }
 
 // SetAppToken sets the App JWT (attached as X-App-Token on every request per §4.5).
 // Called after /auth/app-tokens/mint completes.
 func (h *httpClient) SetAppToken(token string) {
+	h.tokenMu.Lock()
 	h.appToken = token
+	h.tokenMu.Unlock()
 }
 
 // ClearAppToken clears the App JWT.
 func (h *httpClient) ClearAppToken() {
+	h.tokenMu.Lock()
 	h.appToken = ""
+	h.tokenMu.Unlock()
 }
 
 // GetAccessToken returns the current access token (used by OlympusClient to
 // decode JWT claims for the scope bitset fast-path).
 func (h *httpClient) GetAccessToken() string {
+	h.tokenMu.RLock()
+	defer h.tokenMu.RUnlock()
 	return h.accessToken
 }
 
 // OnCatalogStale registers a handler for the X-Olympus-Catalog-Stale header
 // (§4.7). Pass nil to clear.
 func (h *httpClient) OnCatalogStale(handler StaleCatalogHandler) {
+	h.tokenMu.Lock()
 	h.onStaleCatalog = handler
+	h.tokenMu.Unlock()
 }
 
 func (h *httpClient) get(ctx context.Context, path string, query url.Values) (map[string]interface{}, error) {
@@ -169,16 +187,21 @@ func (h *httpClient) doJSON(ctx context.Context, method, path string, query url.
 
 // applyHeaders sets authentication and SDK headers on a request.
 func (h *httpClient) applyHeaders(req *http.Request) {
-	if h.accessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+h.accessToken)
+	h.tokenMu.RLock()
+	access := h.accessToken
+	app := h.appToken
+	h.tokenMu.RUnlock()
+
+	if access != "" {
+		req.Header.Set("Authorization", "Bearer "+access)
 	} else if h.config.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+h.config.APIKey)
 	}
 
 	// App JWT (§4.5 dual-JWT flow) — attached when set via SetAppToken.
 	// Platform-shell tokens (Portal/Cockpit) have no app context and omit.
-	if h.appToken != "" {
-		req.Header.Set("X-App-Token", h.appToken)
+	if app != "" {
+		req.Header.Set("X-App-Token", app)
 	}
 
 	req.Header.Set("X-App-Id", h.config.AppID)
@@ -196,7 +219,9 @@ func (h *httpClient) checkStaleCatalog(resp *http.Response) {
 	if resp.Header.Get("X-Olympus-Catalog-Stale") != "true" {
 		return
 	}
+	h.tokenMu.RLock()
 	handler := h.onStaleCatalog
+	h.tokenMu.RUnlock()
 	if handler == nil {
 		return
 	}

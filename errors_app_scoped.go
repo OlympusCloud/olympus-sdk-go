@@ -122,68 +122,72 @@ func (e *ExceptionExpiredError) Unwrap() error { return e.OlympusAPIError }
 // returns a typed subclass when the server's error code matches one of the
 // app-scoped categories. Returns nil otherwise — the caller uses the base
 // OlympusAPIError.
+//
+// The body JSON is parsed ONCE (not per-field) and passed to extract helpers.
 func routeAppScopedError(base *OlympusAPIError, body []byte, headers http.Header) error {
 	if base == nil {
 		return nil
 	}
 	code := strings.ToLower(base.Code)
 
+	// Parse body once; route-switch uses the parsed map.
+	var parsed map[string]interface{}
+	if len(body) > 0 {
+		_ = json.Unmarshal(body, &parsed) // errors → nil map; helpers handle
+	}
+
 	switch code {
 	case "scope_not_granted", "consent_required":
 		return &ConsentRequiredError{
 			OlympusAPIError: base,
-			Scope:           extractErrField(body, "scope"),
+			Scope:           extractString(parsed, "scope"),
 			ConsentURL: coalesce(
-				extractErrField(body, "consent_url"),
+				extractString(parsed, "consent_url"),
 				headers.Get("X-Olympus-Consent-URL"),
 			),
 		}
 	case "scope_denied":
 		return &ScopeDeniedError{
 			OlympusAPIError: base,
-			Scope:           extractErrField(body, "scope"),
+			Scope:           extractString(parsed, "scope"),
 		}
 	case "billing_grace_exceeded":
 		return &BillingGraceExceededError{
 			OlympusAPIError: base,
 			GraceUntil: coalesce(
-				extractErrField(body, "grace_until"),
+				extractString(parsed, "grace_until"),
 				headers.Get("X-Olympus-Grace-Until"),
 			),
 			UpgradeURL: coalesce(
-				extractErrField(body, "upgrade_url"),
+				extractString(parsed, "upgrade_url"),
 				headers.Get("X-Olympus-Upgrade-URL"),
 			),
 		}
 	case "webauthn_required", "device_changed":
 		return &DeviceChangedError{
 			OlympusAPIError:   base,
-			Challenge:         extractErrField(body, "challenge"),
-			RequiresReconsent: extractErrBoolField(body, "requires_reconsent"),
+			Challenge:         extractString(parsed, "challenge"),
+			RequiresReconsent: extractBool(parsed, "requires_reconsent"),
 		}
 	case "exception_request_invalid":
 		return &ExceptionRequestInvalidError{
 			OlympusAPIError: base,
-			Reason:          extractErrField(body, "reason"),
+			Reason:          extractString(parsed, "reason"),
 		}
 	case "exception_expired":
 		return &ExceptionExpiredError{
 			OlympusAPIError: base,
-			ExceptionID:     extractErrField(body, "exception_id"),
+			ExceptionID:     extractString(parsed, "exception_id"),
 		}
 	}
 
 	return nil
 }
 
-// extractErrField pulls a string field from the response body — checking both
-// the top level and the nested {"error": {...}} envelope.
-func extractErrField(body []byte, key string) string {
-	if len(body) == 0 {
-		return ""
-	}
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(body, &parsed); err != nil {
+// extractString pulls a string field from a pre-parsed response body —
+// checking both the top level and the nested {"error": {...}} envelope.
+func extractString(parsed map[string]interface{}, key string) string {
+	if parsed == nil {
 		return ""
 	}
 	if v, ok := parsed[key].(string); ok {
@@ -197,13 +201,9 @@ func extractErrField(body []byte, key string) string {
 	return ""
 }
 
-// extractErrBoolField — symmetric version of extractErrField for bool fields.
-func extractErrBoolField(body []byte, key string) bool {
-	if len(body) == 0 {
-		return false
-	}
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(body, &parsed); err != nil {
+// extractBool — symmetric version of extractString for bool fields.
+func extractBool(parsed map[string]interface{}, key string) bool {
+	if parsed == nil {
 		return false
 	}
 	if v, ok := parsed[key].(bool); ok {
