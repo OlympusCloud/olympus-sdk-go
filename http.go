@@ -15,12 +15,19 @@ import (
 
 const sdkVersion = "go/0.1.0"
 
+// StaleCatalogHandler fires when the server returns X-Olympus-Catalog-Stale: true
+// (§4.7 rolling-window signal). Consumers should schedule a background token
+// refresh at a randomized 0–15 min offset.
+type StaleCatalogHandler func()
+
 // httpClient is the internal HTTP transport used by all service methods.
 type httpClient struct {
-	config     *Config
-	client     *http.Client
-	baseURL    string
-	accessToken string
+	config        *Config
+	client        *http.Client
+	baseURL       string
+	accessToken   string
+	appToken      string
+	onStaleCatalog StaleCatalogHandler
 }
 
 func newHTTPClient(cfg *Config) *httpClient {
@@ -42,6 +49,29 @@ func (h *httpClient) SetAccessToken(token string) {
 // ClearAccessToken removes the user-scoped access token, reverting to API key auth.
 func (h *httpClient) ClearAccessToken() {
 	h.accessToken = ""
+}
+
+// SetAppToken sets the App JWT (attached as X-App-Token on every request per §4.5).
+// Called after /auth/app-tokens/mint completes.
+func (h *httpClient) SetAppToken(token string) {
+	h.appToken = token
+}
+
+// ClearAppToken clears the App JWT.
+func (h *httpClient) ClearAppToken() {
+	h.appToken = ""
+}
+
+// GetAccessToken returns the current access token (used by OlympusClient to
+// decode JWT claims for the scope bitset fast-path).
+func (h *httpClient) GetAccessToken() string {
+	return h.accessToken
+}
+
+// OnCatalogStale registers a handler for the X-Olympus-Catalog-Stale header
+// (§4.7). Pass nil to clear.
+func (h *httpClient) OnCatalogStale(handler StaleCatalogHandler) {
+	h.onStaleCatalog = handler
 }
 
 func (h *httpClient) get(ctx context.Context, path string, query url.Values) (map[string]interface{}, error) {
@@ -145,10 +175,36 @@ func (h *httpClient) applyHeaders(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+h.config.APIKey)
 	}
 
+	// App JWT (§4.5 dual-JWT flow) — attached when set via SetAppToken.
+	// Platform-shell tokens (Portal/Cockpit) have no app context and omit.
+	if h.appToken != "" {
+		req.Header.Set("X-App-Token", h.appToken)
+	}
+
 	req.Header.Set("X-App-Id", h.config.AppID)
 	req.Header.Set("X-SDK-Version", sdkVersion)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+}
+
+// checkStaleCatalog fires the stale-catalog handler when the response carries
+// the X-Olympus-Catalog-Stale: true header (§4.7 rolling window).
+func (h *httpClient) checkStaleCatalog(resp *http.Response) {
+	if resp == nil || resp.StatusCode >= 400 {
+		return
+	}
+	if resp.Header.Get("X-Olympus-Catalog-Stale") != "true" {
+		return
+	}
+	handler := h.onStaleCatalog
+	if handler == nil {
+		return
+	}
+	// Swallow handler panics — the caller's request was successful.
+	defer func() {
+		_ = recover()
+	}()
+	handler()
 }
 
 // handleResponse reads the HTTP response and returns parsed JSON or an error.
@@ -160,8 +216,11 @@ func (h *httpClient) handleResponse(resp *http.Response) (map[string]interface{}
 		return nil, fmt.Errorf("olympus-sdk: failed to read response body: %w", err)
 	}
 
+	// Fire stale-catalog handler BEFORE returning the body (§4.7).
+	h.checkStaleCatalog(resp)
+
 	if resp.StatusCode >= 400 {
-		return nil, h.parseError(resp.StatusCode, respBody)
+		return nil, h.parseError(resp.StatusCode, respBody, resp.Header)
 	}
 
 	// 204 No Content
@@ -178,7 +237,7 @@ func (h *httpClient) handleResponse(resp *http.Response) (map[string]interface{}
 }
 
 // parseError attempts to extract a structured API error from the response body.
-func (h *httpClient) parseError(statusCode int, body []byte) error {
+func (h *httpClient) parseError(statusCode int, body []byte, headers http.Header) error {
 	apiErr := &OlympusAPIError{
 		StatusCode: statusCode,
 		Code:       "UNKNOWN",
@@ -192,24 +251,27 @@ func (h *httpClient) parseError(statusCode int, body []byte) error {
 	}
 
 	var envelope errorResponse
+	envelopeHit := false
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error != nil {
 		apiErr.Code = envelope.Error.Code
 		apiErr.Message = envelope.Error.Message
 		apiErr.RequestID = envelope.Error.RequestID
-		return apiErr
+		envelopeHit = true
 	}
 
-	// Try flat error structure
-	var flat map[string]interface{}
-	if err := json.Unmarshal(body, &flat); err == nil {
-		if code, ok := flat["code"].(string); ok {
-			apiErr.Code = code
-		}
-		if msg, ok := flat["message"].(string); ok {
-			apiErr.Message = msg
-		}
-		if reqID, ok := flat["request_id"].(string); ok {
-			apiErr.RequestID = reqID
+	// Try flat error structure (only when envelope didn't match)
+	if !envelopeHit {
+		var flat map[string]interface{}
+		if err := json.Unmarshal(body, &flat); err == nil {
+			if code, ok := flat["code"].(string); ok {
+				apiErr.Code = code
+			}
+			if msg, ok := flat["message"].(string); ok {
+				apiErr.Message = msg
+			}
+			if reqID, ok := flat["request_id"].(string); ok {
+				apiErr.RequestID = reqID
+			}
 		}
 	}
 
@@ -219,6 +281,11 @@ func (h *httpClient) parseError(statusCode int, body []byte) error {
 		if msg != "" {
 			apiErr.Message = msg
 		}
+	}
+
+	// Route recognized app-scoped codes to typed error subclasses.
+	if typed := routeAppScopedError(apiErr, body, headers); typed != nil {
+		return typed
 	}
 
 	return apiErr

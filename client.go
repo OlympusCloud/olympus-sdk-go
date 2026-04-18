@@ -56,6 +56,14 @@ type OlympusClient struct {
 	tuning             *TuningService
 	voice              *VoiceService
 	connect            *ConnectService
+	consent            *ConsentService
+	governance         *GovernanceService
+
+	// Cached decoded JWT claims (lazy; invalidated on token change).
+	cachedClaims         map[string]interface{}
+	cachedClaimsForToken string
+	cachedBitset         []byte
+	cachedBitsetForToken string
 }
 
 // NewClient creates a new Olympus Cloud SDK client with the given configuration.
@@ -323,6 +331,143 @@ func (c *OlympusClient) Connect() *ConnectService {
 		c.connect = &ConnectService{http: c.http}
 	}
 	return c.connect
+}
+
+// Consent returns the app-scoped permissions consent service (v2.0.0).
+//
+// See docs/platform/APP-SCOPED-PERMISSIONS.md §6. Part of epic #3234.
+func (c *OlympusClient) Consent() *ConsentService {
+	if c.consent == nil {
+		c.consent = &ConsentService{http: c.http}
+	}
+	return c.consent
+}
+
+// Governance returns the policy exception framework service (v2.0.0).
+//
+// Narrow scope: session_ttl_role_ceiling and grace_policy_category only.
+// See §17 of APP-SCOPED-PERMISSIONS.md.
+func (c *OlympusClient) Governance() *GovernanceService {
+	if c.governance == nil {
+		c.governance = &GovernanceService{http: c.http}
+	}
+	return c.governance
+}
+
+// ============================================================================
+// App-scoped token management (§4.5 dual-JWT flow)
+// ============================================================================
+
+// SetAppToken attaches the App JWT obtained from /auth/app-tokens/mint.
+// Forwarded on every request as X-App-Token alongside the user JWT
+// Authorization header per the dual-JWT flow (§4.5).
+func (c *OlympusClient) SetAppToken(token string) {
+	c.http.SetAppToken(token)
+	c.invalidateBitsetCache()
+}
+
+// ClearAppToken clears the App JWT (e.g. on logout).
+func (c *OlympusClient) ClearAppToken() {
+	c.http.ClearAppToken()
+	c.invalidateBitsetCache()
+}
+
+// SetAccessToken replaces the active access token. Invalidates cached
+// bitset decode.
+func (c *OlympusClient) SetAccessToken(token string) {
+	c.http.SetAccessToken(token)
+	c.invalidateBitsetCache()
+}
+
+// OnCatalogStale registers a handler fired when the server returns
+// X-Olympus-Catalog-Stale: true (§4.7 rolling window). Consumers should
+// schedule a background token refresh at a randomized 0–15 min offset.
+func (c *OlympusClient) OnCatalogStale(handler StaleCatalogHandler) {
+	c.http.OnCatalogStale(handler)
+}
+
+// HasScopeBit is the fast-path constant-time bitmask check against the
+// decoded app_scopes_bitset claim in the current access token.
+//
+// Returns false when no token is set, for platform-shell tokens without a
+// bitset, for negative bitID, or when bitID is out of range. Used by SDK
+// service methods to fail-fast with a typed ScopeDeniedError BEFORE making
+// an HTTP call.
+func (c *OlympusClient) HasScopeBit(bitID int) bool {
+	if bitID < 0 {
+		return false
+	}
+	bitset := c.decodeBitsetOnce()
+	if bitset == nil {
+		return false
+	}
+	byteIdx := bitID / 8
+	bitIdx := bitID % 8
+	if byteIdx >= len(bitset) {
+		return false
+	}
+	return bitset[byteIdx]&(1<<bitIdx) != 0
+}
+
+// IsAppScoped returns true when the current access token carries an app_id
+// claim (minted via /auth/app-tokens/mint for an app-scoped session).
+func (c *OlympusClient) IsAppScoped() bool {
+	claims := c.decodedClaims()
+	if claims == nil {
+		return false
+	}
+	_, ok := claims["app_id"].(string)
+	return ok
+}
+
+func (c *OlympusClient) invalidateBitsetCache() {
+	c.cachedClaims = nil
+	c.cachedClaimsForToken = ""
+	c.cachedBitset = nil
+	c.cachedBitsetForToken = ""
+}
+
+func (c *OlympusClient) decodedClaims() map[string]interface{} {
+	token := c.http.GetAccessToken()
+	if token == "" {
+		return nil
+	}
+	if c.cachedClaimsForToken == token && c.cachedClaims != nil {
+		return c.cachedClaims
+	}
+	claims := parseJWTPayload(token)
+	if claims != nil {
+		c.cachedClaims = claims
+		c.cachedClaimsForToken = token
+	}
+	return claims
+}
+
+func (c *OlympusClient) decodeBitsetOnce() []byte {
+	token := c.http.GetAccessToken()
+	if token == "" {
+		return nil
+	}
+	if c.cachedBitsetForToken == token && c.cachedBitset != nil {
+		return c.cachedBitset
+	}
+	claims := c.decodedClaims()
+	if claims == nil {
+		return nil
+	}
+	bitsetStr, _ := claims["app_scopes_bitset"].(string)
+	if bitsetStr == "" {
+		c.cachedBitset = []byte{}
+		c.cachedBitsetForToken = token
+		return c.cachedBitset
+	}
+	decoded, err := base64URLDecode(bitsetStr)
+	if err != nil {
+		return nil
+	}
+	c.cachedBitset = decoded
+	c.cachedBitsetForToken = token
+	return decoded
 }
 
 // Config returns the active SDK configuration.
