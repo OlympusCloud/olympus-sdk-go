@@ -20,6 +20,8 @@
 //	resp, err := client.AI().Query(ctx, "What sold best this week?", nil)
 package olympus
 
+import "sync"
+
 // OlympusClient is the main entry point for the Olympus Cloud SDK.
 // It provides typed access to 22 platform services.
 type OlympusClient struct {
@@ -56,6 +58,16 @@ type OlympusClient struct {
 	tuning             *TuningService
 	voice              *VoiceService
 	connect            *ConnectService
+	consent            *ConsentService
+	governance         *GovernanceService
+
+	// Cached decoded JWT claims (lazy; invalidated on token change).
+	// Protected by cacheMu since *OlympusClient is shared across goroutines.
+	cacheMu              sync.RWMutex
+	cachedClaims         map[string]interface{}
+	cachedClaimsForToken string
+	cachedBitset         []byte
+	cachedBitsetForToken string
 }
 
 // NewClient creates a new Olympus Cloud SDK client with the given configuration.
@@ -325,7 +337,28 @@ func (c *OlympusClient) Connect() *ConnectService {
 	return c.connect
 }
 
-// Config returns the active SDK configuration.
+// Consent returns the app-scoped permissions consent service (v2.0.0).
+//
+// See docs/platform/APP-SCOPED-PERMISSIONS.md §6. Part of epic #3234.
+func (c *OlympusClient) Consent() *ConsentService {
+	if c.consent == nil {
+		c.consent = &ConsentService{http: c.http}
+	}
+	return c.consent
+}
+
+// Governance returns the policy exception framework service (v2.0.0).
+//
+// Narrow scope: session_ttl_role_ceiling and grace_policy_category only.
+// See §17 of APP-SCOPED-PERMISSIONS.md.
+func (c *OlympusClient) Governance() *GovernanceService {
+	if c.governance == nil {
+		c.governance = &GovernanceService{http: c.http}
+	}
+	return c.governance
+}
+
+// =====================================================================// Config returns the active SDK configuration.
 func (c *OlympusClient) Config() *Config {
 	return c.config
 }

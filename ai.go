@@ -189,7 +189,7 @@ func (s *AIService) Stream(ctx context.Context, prompt string, callback StreamCa
 	if resp.StatusCode >= 400 {
 		body := make([]byte, 4096)
 		n, _ := resp.Body.Read(body)
-		return "", s.http.parseError(resp.StatusCode, body[:n])
+		return "", s.http.parseError(resp.StatusCode, body[:n], resp.Header)
 	}
 
 	var accumulated strings.Builder
