@@ -190,3 +190,67 @@ func (s *AuthService) Register(ctx context.Context, email, password, name string
 	}
 	return parseUser(resp), nil
 }
+
+// ----------------------------------------------------------------------------
+// App-scoped permissions — HasScope / RequireScope / GrantedScopes helpers
+// (olympus-cloud-gcp#3403 §1.2). Reads scopes from the active access token's
+// `app_scopes` JWT claim. 5-language parity with dart / typescript / python /
+// rust SDKs.
+// ----------------------------------------------------------------------------
+
+// GrantedScopes returns the canonical scope strings granted to the current
+// session, decoded from the access token's `app_scopes` JWT claim. Returns
+// nil when no token is set, the token isn't a JWT, or the token has no
+// app_scopes claim (i.e. a platform-shell token).
+//
+// The returned slice is a defensive copy — mutating it does not affect
+// subsequent HasScope / RequireScope checks.
+func (s *AuthService) GrantedScopes() []string {
+	token := s.http.GetAccessToken()
+	if token == "" {
+		return nil
+	}
+	claims := parseJWTPayload(token)
+	if claims == nil {
+		return nil
+	}
+	raw, ok := claims["app_scopes"].([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if sv, ok := v.(string); ok {
+			out = append(out, sv)
+		}
+	}
+	return out
+}
+
+// HasScope reports whether the current session carries the given canonical
+// scope (format: "auth.session.read@user"). Returns false for the empty
+// string, missing token, or non-JWT tokens.
+func (s *AuthService) HasScope(scope string) bool {
+	if scope == "" {
+		return false
+	}
+	for _, granted := range s.GrantedScopes() {
+		if granted == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// RequireScope returns a *ScopeRequiredError if the scope is not present in
+// the current session. Typically used as a client-side pre-flight:
+//
+//	if err := client.Auth().RequireScope(olympus.ScopeCommerceOrderWriteAtTenant); err != nil {
+//	    // route to consent flow
+//	}
+func (s *AuthService) RequireScope(scope string) error {
+	if !s.HasScope(scope) {
+		return &ScopeRequiredError{Scope: scope}
+	}
+	return nil
+}

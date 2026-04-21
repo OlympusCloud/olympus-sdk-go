@@ -15,6 +15,11 @@ type AuthSession struct {
 	UserID       string   `json:"user_id,omitempty"`
 	TenantID     string   `json:"tenant_id,omitempty"`
 	Roles        []string `json:"roles,omitempty"`
+	// AppScopes lists the canonical scope strings granted to the session
+	// (decoded from the JWT `app_scopes` claim). Format: "auth.session.read@user".
+	// Populated by parseAuthSession when the server returns the list in the
+	// login/refresh payload and re-hydrated from the token in AuthService.
+	AppScopes []string `json:"app_scopes,omitempty"`
 }
 
 // User represents a platform user.
@@ -93,10 +98,10 @@ type CatalogItem struct {
 
 // CatalogModifier represents a modifier definition within a catalog item.
 type CatalogModifier struct {
-	ID       string                 `json:"id"`
-	Name     string                 `json:"name"`
-	Price    int                    `json:"price,omitempty"`
-	Required *bool                  `json:"required,omitempty"`
+	ID       string                  `json:"id"`
+	Name     string                  `json:"name"`
+	Price    int                     `json:"price,omitempty"`
+	Required *bool                   `json:"required,omitempty"`
 	Options  []CatalogModifierOption `json:"options,omitempty"`
 }
 
@@ -123,11 +128,11 @@ type AIResponse struct {
 
 // AgentResult represents the result of invoking a LangGraph agent.
 type AgentResult struct {
-	Output    string      `json:"output"`
-	AgentName string      `json:"agent_name,omitempty"`
-	Steps     []AgentStep `json:"steps,omitempty"`
-	TokensUsed int        `json:"tokens_used,omitempty"`
-	RequestID string      `json:"request_id,omitempty"`
+	Output     string      `json:"output"`
+	AgentName  string      `json:"agent_name,omitempty"`
+	Steps      []AgentStep `json:"steps,omitempty"`
+	TokensUsed int         `json:"tokens_used,omitempty"`
+	RequestID  string      `json:"request_id,omitempty"`
 }
 
 // AgentStep represents a single step executed by an agent.
@@ -290,15 +295,15 @@ type UsageReport struct {
 
 // Invoice represents a billing invoice.
 type Invoice struct {
-	ID          string             `json:"id"`
-	Status      string             `json:"status,omitempty"`
-	Amount      int                `json:"amount,omitempty"` // In cents.
-	Currency    string             `json:"currency,omitempty"`
-	PeriodStart *time.Time         `json:"period_start,omitempty"`
-	PeriodEnd   *time.Time         `json:"period_end,omitempty"`
-	PaidAt      *time.Time         `json:"paid_at,omitempty"`
-	PDFURL      string             `json:"pdf_url,omitempty"`
-	LineItems   []InvoiceLineItem  `json:"line_items,omitempty"`
+	ID          string            `json:"id"`
+	Status      string            `json:"status,omitempty"`
+	Amount      int               `json:"amount,omitempty"` // In cents.
+	Currency    string            `json:"currency,omitempty"`
+	PeriodStart *time.Time        `json:"period_start,omitempty"`
+	PeriodEnd   *time.Time        `json:"period_end,omitempty"`
+	PaidAt      *time.Time        `json:"paid_at,omitempty"`
+	PDFURL      string            `json:"pdf_url,omitempty"`
+	LineItems   []InvoiceLineItem `json:"line_items,omitempty"`
 }
 
 // InvoiceLineItem represents a single line item on an invoice.

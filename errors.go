@@ -48,6 +48,26 @@ func (e *OlympusAPIError) IsServerError() bool {
 	return e.StatusCode >= 500 && e.StatusCode < 600
 }
 
+// ScopeRequiredError is returned by AuthService.RequireScope when the
+// current session does not carry the requested app scope. Callers should
+// route the user through the platform-served consent flow (see
+// ConsentService.Grant + the ConsentRequiredError carried on actual API
+// rejections) and then retry.
+//
+// This is a client-side guard — it does not imply the server rejected the
+// request, only that a pre-flight check found the scope missing in the
+// decoded JWT `app_scopes` claim. Issue #3403 §1.2.
+type ScopeRequiredError struct {
+	// Scope is the canonical scope string that was required, e.g.
+	// "commerce.order.write@tenant".
+	Scope string
+}
+
+// Error implements the error interface.
+func (e *ScopeRequiredError) Error() string {
+	return fmt.Sprintf("ScopeRequired: %s", e.Scope)
+}
+
 // errorResponse represents the JSON error envelope from the API.
 type errorResponse struct {
 	Error *errorDetail `json:"error,omitempty"`
