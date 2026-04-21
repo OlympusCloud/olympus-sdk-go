@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Scope helper + generated constants (OlympusCloud/olympus-cloud-gcp#3403 §1.2)
+
+Wires client-side app-scope introspection off the JWT `app_scopes` claim and
+ships typed constants for every scope + role in the platform catalog.
+
+**New APIs on `AuthService`:**
+
+- `HasScope(scope string) bool` — true iff the current session carries the
+  given canonical scope string (e.g. `auth.session.read@user`).
+- `RequireScope(scope string) error` — returns `*ScopeRequiredError` when the
+  scope is not present. Useful as a client-side pre-flight before routing the
+  user through the consent flow.
+- `GrantedScopes() []string` — defensive copy of the scope list decoded from
+  the access token's `app_scopes` claim.
+
+**New types:** `ScopeRequiredError` in `errors.go`; `AppScopes []string` field
+on `AuthSession`.
+
+**Generated constants** (`constants_scopes.go`, `constants_roles.go`): every
+scope + role from `docs/platform/scopes.yaml` + `docs/platform/roles.yaml` as
+a typed Go constant, e.g. `olympus.ScopeAuthSessionReadAtUser`,
+`olympus.RoleTenantAdmin`. Regenerate via
+`scripts/generate_sdk_scope_constants.py` in the monorepo. 5-language parity
+with dart / typescript / python / rust SDKs.
+
 ## 0.5.0 (2026-04-19)
 
 ### Wave 2 of the SDK 1.0 Campaign (OlympusCloud/olympus-cloud-gcp#3216)

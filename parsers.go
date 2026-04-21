@@ -164,7 +164,7 @@ func parseSlice[T any](data map[string]interface{}, key string, parser func(map[
 // --------------------------------------------------------------------------
 
 func parseAuthSession(data map[string]interface{}) *AuthSession {
-	return &AuthSession{
+	session := &AuthSession{
 		AccessToken:  getString(data, "access_token"),
 		TokenType:    getStringOr(data, "token_type"),
 		ExpiresIn:    getInt(data, "expires_in"),
@@ -172,7 +172,24 @@ func parseAuthSession(data map[string]interface{}) *AuthSession {
 		UserID:       getString(data, "user_id"),
 		TenantID:     getString(data, "tenant_id"),
 		Roles:        getStringSlice(data, "roles"),
+		AppScopes:    getStringSlice(data, "app_scopes"),
 	}
+	// If the server didn't include app_scopes in the envelope, fall back to
+	// the JWT `app_scopes` claim so HasScope works uniformly.
+	if len(session.AppScopes) == 0 && session.AccessToken != "" {
+		if claims := parseJWTPayload(session.AccessToken); claims != nil {
+			if raw, ok := claims["app_scopes"].([]interface{}); ok {
+				out := make([]string, 0, len(raw))
+				for _, v := range raw {
+					if s, ok := v.(string); ok {
+						out = append(out, s)
+					}
+				}
+				session.AppScopes = out
+			}
+		}
+	}
+	return session
 }
 
 func parseUser(data map[string]interface{}) *User {
@@ -297,11 +314,11 @@ func parseAgentResult(data map[string]interface{}) *AgentResult {
 	}
 
 	return &AgentResult{
-		Output:    getStringOr(data, "output", "result"),
-		AgentName: getString(data, "agent_name"),
-		Steps:     steps,
+		Output:     getStringOr(data, "output", "result"),
+		AgentName:  getString(data, "agent_name"),
+		Steps:      steps,
 		TokensUsed: getInt(data, "tokens_used"),
-		RequestID: getString(data, "request_id"),
+		RequestID:  getString(data, "request_id"),
 	}
 }
 
