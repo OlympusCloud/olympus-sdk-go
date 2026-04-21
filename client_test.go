@@ -166,8 +166,8 @@ func TestAuthHeaders(t *testing.T) {
 			if appID != "test-app" {
 				t.Errorf("expected X-App-Id test-app, got %s", appID)
 			}
-			if sdkVer != "go/0.1.0" {
-				t.Errorf("expected X-SDK-Version go/0.1.0, got %s", sdkVer)
+			if sdkVer != "go/"+Version {
+				t.Errorf("expected X-SDK-Version go/%s, got %s", Version, sdkVer)
 			}
 
 			jsonResponse(w, 200, map[string]interface{}{

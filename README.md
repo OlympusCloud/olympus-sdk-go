@@ -71,6 +71,14 @@ func main() {
 | `client.Business()` 🆕 | Revenue, staff, AI insights |
 | `client.Maximus()` 🆕 | Consumer AI assistant |
 | `client.POS()` 🆕 | POS voice order integration |
+| `client.Voice()` | Voice agents — configs, conversations, campaigns, phone numbers, marketplace voices, edge pipeline |
+| `client.VoiceOrders()` | Voice-collected order placement (with menu price validation) |
+| `client.SMS()` 🆕 | Outbound SMS via voice platform + unified CPaaS (Telnyx/Twilio) |
+| `client.SmartHome()` 🆕 | Smart-home platforms, devices, scenes, automations |
+| `client.Identity()` 🆕 | Olympus ID — global cross-tenant identity + age verification |
+| `client.Connect()` | Marketing-funnel + lead capture |
+| `client.Consent()` | App-scoped permissions consent surface (v2.0) |
+| `client.Governance()` | Policy exception framework (v2.0) |
 
 ## License
 
