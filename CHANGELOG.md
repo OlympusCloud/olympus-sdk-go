@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.5.0 (2026-04-19)
+
+### Wave 2 of the SDK 1.0 Campaign (OlympusCloud/olympus-cloud-gcp#3216)
+
+Mirrors the canonical dart SDK surface for voice + identity + smart-home +
+SMS + voice-orders. Wire-mirrors `voice_service.dart`,
+`identity_service.dart`, `smart_home_service.dart`, `sms_service.dart`, and
+`voice_order_service.dart`.
+
+**New services:**
+
+- `client.Identity()` — Olympus ID (global cross-tenant identity) + Document
+  AI age-verification. Wraps `/platform/identities*` and `/identity/*`.
+- `client.SmartHome()` — smart-home platforms, devices, rooms, scenes,
+  automations. Wraps `/smart-home/*`.
+- `client.SMS()` — voice-platform SMS (`/voice/sms/*`) and unified CPaaS
+  messaging (`/cpaas/messages/*`).
+
+**New methods on existing services:**
+
+- `client.Voice()` — full dart parity. Adds agent CRUD (Create/Get/Update/
+  Delete/Clone), persona library, ambiance/voice tuning, workflow
+  templates, voicemails, conversations, analytics, campaigns, phone
+  numbers, marketplace voices/packs, calls, speaker enrollment, voice
+  profiles, edge pipeline (ProcessAudio + GetVoiceWebSocketURL +
+  PipelineHealth), caller profiles, escalation/business hours, agent
+  testing. ~50 new methods.
+
+**New types:** `OlympusIdentity`, `IdentityLink`,
+`GetOrCreateFromFirebaseRequest`, `ListDevicesOptions`, `SendRequest`,
+`GetConversationsOptions`, `SendViaCpaasRequest`, `ListConfigsOptions`,
+`CreateAgentRequest`, `UpdateAgentRequest`, `CloneAgentRequest`,
+`PreviewAgentVoiceRequest`, `ProvisionAgentRequest`, `ListPersonasOptions`,
+`InstantiateAgentTemplateRequest`, `PublishAgentAsTemplateRequest`,
+`UploadAmbianceBedRequest`, `UpdateAgentAmbianceRequest`,
+`UpdateAgentVoiceOverridesRequest`, `ListWorkflowTemplatesOptions`,
+`ListVoicemailsOptions`, `ListConversationsOptions`,
+`ListVoiceMessagesOptions`, `GetAnalyticsOptions`, `ListCampaignsOptions`,
+`ListNumbersOptions`, `SearchNumbersOptions`, `ListVoicesOptions`,
+`ListPacksOptions`, `ListProfilesOptions`, `ProcessAudioRequest`,
+`ListCallerProfilesOptions`, `TestAgentRequest`.
+
+**Client surface completion (PR #2 follow-up):**
+
+- `*OlympusClient` accessors `SetAccessToken`, `ClearAccessToken`,
+  `SetAppToken`, `ClearAppToken`, `OnCatalogStale`, `IsAppScoped`,
+  `HasScopeBit` — these were referenced by the v0.4.x test suite added in
+  PR #2 but never wired through the public client. Wave 2 adds them so
+  `go test ./...` is green from a fresh checkout.
+
+**Versioning:** `Version = "0.5.0"` exposed via the new `version.go`. The
+`X-SDK-Version` header now derives from this constant (was hardcoded to
+`go/0.1.0`).
+
+**Tests:** new `voice_test.go`, `identity_test.go`, `smart_home_test.go`,
+`sms_test.go`, `voice_orders_test.go`. Test suite now: `go test ./...`
+green, race-clean.
+
 ## 0.4.0 (2026-04-18)
 
 ### Wave 1 of the SDK 1.0 Campaign (OlympusCloud/olympus-cloud-gcp#3216, Wave #3217)

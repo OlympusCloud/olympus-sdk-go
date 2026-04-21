@@ -28,38 +28,41 @@ type OlympusClient struct {
 	config *Config
 	http   *httpClient
 
-	auth        *AuthService
-	commerce    *CommerceService
-	ai          *AIService
-	pay         *PayService
-	notify      *NotifyService
-	events      *EventsService
-	data        *DataService
-	storage     *StorageService
-	marketplace *MarketplaceService
-	billing     *BillingService
-	gating      *GatingService
-	devices     *DevicesService
-	observe     *ObserveService
-	creator     *CreatorService
-	platform    *PlatformService
-	developer   *DeveloperService
-	business    *BusinessService
-	maximus            *MaximusService
-	pos                *POSService
-	agentWorkflows     *AgentWorkflowsService
-	enterpriseContext  *EnterpriseContextService
-	messages           *MessagesService
-	voiceOrders        *VoiceOrdersService
-	adminEther         *AdminEtherService
-	adminCpaas         *AdminCpaasService
-	adminBilling       *AdminBillingService
-	adminGating        *AdminGatingService
-	tuning             *TuningService
-	voice              *VoiceService
-	connect            *ConnectService
-	consent            *ConsentService
-	governance         *GovernanceService
+	auth              *AuthService
+	commerce          *CommerceService
+	ai                *AIService
+	pay               *PayService
+	notify            *NotifyService
+	events            *EventsService
+	data              *DataService
+	storage           *StorageService
+	marketplace       *MarketplaceService
+	billing           *BillingService
+	gating            *GatingService
+	devices           *DevicesService
+	observe           *ObserveService
+	creator           *CreatorService
+	platform          *PlatformService
+	developer         *DeveloperService
+	business          *BusinessService
+	maximus           *MaximusService
+	pos               *POSService
+	agentWorkflows    *AgentWorkflowsService
+	enterpriseContext *EnterpriseContextService
+	messages          *MessagesService
+	voiceOrders       *VoiceOrdersService
+	adminEther        *AdminEtherService
+	adminCpaas        *AdminCpaasService
+	adminBilling      *AdminBillingService
+	adminGating       *AdminGatingService
+	tuning            *TuningService
+	voice             *VoiceService
+	connect           *ConnectService
+	consent           *ConsentService
+	governance        *GovernanceService
+	identity          *IdentityService
+	smartHome         *SmartHomeService
+	sms               *SMSService
 
 	// Cached decoded JWT claims (lazy; invalidated on token change).
 	// Protected by cacheMu since *OlympusClient is shared across goroutines.
@@ -356,6 +359,38 @@ func (c *OlympusClient) Governance() *GovernanceService {
 		c.governance = &GovernanceService{http: c.http}
 	}
 	return c.governance
+}
+
+// Identity returns the global Olympus ID + age-verification service.
+//
+// v0.5.0 — Wave 2 of #3216.
+func (c *OlympusClient) Identity() *IdentityService {
+	if c.identity == nil {
+		c.identity = &IdentityService{http: c.http}
+	}
+	return c.identity
+}
+
+// SmartHome returns the smart-home integration service (platforms, devices,
+// rooms, scenes, automations).
+//
+// v0.5.0 — Wave 2 of #3216.
+func (c *OlympusClient) SmartHome() *SmartHomeService {
+	if c.smartHome == nil {
+		c.smartHome = &SmartHomeService{http: c.http}
+	}
+	return c.smartHome
+}
+
+// SMS returns the SMS messaging service (voice-platform SMS + unified
+// CPaaS SMS).
+//
+// v0.5.0 — Wave 2 of #3216.
+func (c *OlympusClient) SMS() *SMSService {
+	if c.sms == nil {
+		c.sms = &SMSService{http: c.http}
+	}
+	return c.sms
 }
 
 // =====================================================================// Config returns the active SDK configuration.

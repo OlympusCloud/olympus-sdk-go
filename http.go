@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const sdkVersion = "go/0.1.0"
+const sdkVersion = "go/" + Version
 
 // StaleCatalogHandler fires when the server returns X-Olympus-Catalog-Stale: true
 // (§4.7 rolling-window signal). Consumers should schedule a background token
