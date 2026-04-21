@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Silent token refresh + session events (OlympusCloud/olympus-cloud-gcp#3403 §1.4 / olympus-cloud-gcp#3412)
+
+In-SDK 401-at-TTL auto-resolution. A goroutine decodes the access-token
+`exp` claim, sleeps until `exp - refreshMargin`, and calls `/auth/refresh`
+transparently. Session transitions are broadcast to subscribers via a
+buffered event channel.
+
+**New APIs on `AuthService`:**
+
+- `StartSilentRefresh(refreshMargin time.Duration) func()` — spawns the
+  refresh goroutine. Returns a cancel func equivalent to `StopSilentRefresh`.
+  Idempotent — calling twice cancels the prior goroutine cleanly (no leak).
+  Pass `<=0` to use `DefaultRefreshMargin` (60s), matching the dart /
+  typescript / python / rust SDKs.
+- `StopSilentRefresh()` — stops the goroutine. Safe to call before Start.
+- `SessionEvents() (<-chan SessionEvent, func())` — buffered channel (cap 8)
+  of session transitions. Fan-out is non-blocking — a full buffer drops
+  rather than blocks the emitter. The returned cancel unregisters and
+  closes the channel.
+
+**New types:** `SessionEvent` discriminated union with variants
+`*SessionLoggedIn`, `*SessionRefreshed`, `*SessionExpired{Reason}`,
+`*SessionLoggedOut`. `DefaultRefreshMargin = 60 * time.Second`.
+
+**Behaviour wired through existing methods:**
+
+- `Login` / `LoginSSO` / `LoginPin` / `LoginMFA` — emit `SessionLoggedIn`
+  and nudge the refresh goroutine to reschedule from the new exp.
+- `Refresh` — emits `SessionRefreshed`, reschedules.
+- `Logout` — cancels the goroutine, clears HTTP token, emits
+  `SessionLoggedOut`.
+- On refresh failure (non-2xx or transport error) — goroutine emits
+  `SessionExpired{Reason}`, clears the HTTP token, and exits.
+
+Race-safe: mutex-protected goroutine handles + stored session; non-blocking
+fan-out; full `-race` test coverage including concurrent Start/Stop and
+concurrent subscribers.
+
 ### Scope helper + generated constants (OlympusCloud/olympus-cloud-gcp#3403 §1.2)
 
 Wires client-side app-scope introspection off the JWT `app_scopes` claim and

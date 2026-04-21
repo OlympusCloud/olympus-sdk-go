@@ -3,19 +3,29 @@ package olympus
 import (
 	"context"
 	"fmt"
+	"sync"
 )
 
 // AuthService handles authentication, user management, and API key operations.
 //
 // Wraps the Olympus Auth service (Rust) via the Go API Gateway.
 // Routes: /auth/*, /platform/users/*.
+//
+// Also owns the silent token refresh goroutine + session event stream
+// (olympus-cloud-gcp#3412). See silent_refresh.go.
 type AuthService struct {
 	http *httpClient
+
+	// stateOnce + state lazily initialise the silent-refresh bookkeeping.
+	// Keeping this off the critical path (non-refresh users pay nothing).
+	stateOnce sync.Once
+	state     *sessionState
 }
 
 // Login authenticates with email and password. On success the returned
 // session's access token is automatically set on the HTTP client for
-// subsequent requests.
+// subsequent requests. Emits SessionLoggedIn to subscribers and nudges the
+// silent-refresh goroutine (if running) to reschedule from the new exp.
 func (s *AuthService) Login(ctx context.Context, email, password string) (*AuthSession, error) {
 	resp, err := s.http.post(ctx, "/auth/login", map[string]interface{}{
 		"email":    email,
@@ -27,6 +37,7 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*AuthS
 
 	session := parseAuthSession(resp)
 	s.http.SetAccessToken(session.AccessToken)
+	s.onSessionAcquired(session, false)
 	return session, nil
 }
 
@@ -41,6 +52,7 @@ func (s *AuthService) LoginSSO(ctx context.Context, provider string) (*AuthSessi
 
 	session := parseAuthSession(resp)
 	s.http.SetAccessToken(session.AccessToken)
+	s.onSessionAcquired(session, false)
 	return session, nil
 }
 
@@ -60,6 +72,7 @@ func (s *AuthService) LoginPin(ctx context.Context, pin string, locationID strin
 
 	session := parseAuthSession(resp)
 	s.http.SetAccessToken(session.AccessToken)
+	s.onSessionAcquired(session, false)
 	return session, nil
 }
 
@@ -72,7 +85,9 @@ func (s *AuthService) Me(ctx context.Context) (*User, error) {
 	return parseUser(resp), nil
 }
 
-// Refresh exchanges a refresh token for a new token pair.
+// Refresh exchanges a refresh token for a new token pair. Emits
+// SessionRefreshed to subscribers and nudges the silent-refresh goroutine
+// (if running) to reschedule from the new exp.
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*AuthSession, error) {
 	resp, err := s.http.post(ctx, "/auth/refresh", map[string]interface{}{
 		"refresh_token": refreshToken,
@@ -83,13 +98,17 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*AuthSe
 
 	session := parseAuthSession(resp)
 	s.http.SetAccessToken(session.AccessToken)
+	s.onSessionAcquired(session, true)
 	return session, nil
 }
 
-// Logout invalidates the current session and clears the access token.
+// Logout invalidates the current session, cancels the silent-refresh
+// goroutine (if running), clears the access token, and emits
+// SessionLoggedOut.
 func (s *AuthService) Logout(ctx context.Context) error {
 	_, err := s.http.post(ctx, "/auth/logout", nil)
 	s.http.ClearAccessToken()
+	s.onSessionLoggedOut()
 	return err
 }
 
@@ -175,6 +194,7 @@ func (s *AuthService) LoginMFA(ctx context.Context, mfaToken, code string) (*Aut
 
 	session := parseAuthSession(resp)
 	s.http.SetAccessToken(session.AccessToken)
+	s.onSessionAcquired(session, false)
 	return session, nil
 }
 
