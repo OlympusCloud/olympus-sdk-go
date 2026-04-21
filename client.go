@@ -63,6 +63,7 @@ type OlympusClient struct {
 	identity          *IdentityService
 	smartHome         *SmartHomeService
 	sms               *SMSService
+	tenant            *TenantService
 
 	// Cached decoded JWT claims (lazy; invalidated on token change).
 	// Protected by cacheMu since *OlympusClient is shared across goroutines.
@@ -391,6 +392,19 @@ func (c *OlympusClient) SMS() *SMSService {
 		c.sms = &SMSService{http: c.http}
 	}
 	return c.sms
+}
+
+// Tenant returns the canonical tenant-lifecycle service (#3403 §2 + §4.4).
+//
+// Wraps POST/GET/PATCH /tenant/{create,current,retire,unretire,mine,switch}
+// shipped by PR #3410. Replaces the raw `INSERT INTO tenants` hack in
+// pizza-os admin_app.dart:215 and provides typed signup, retire-with-grace,
+// multi-tenant listing, and cross-tenant session exchange.
+func (c *OlympusClient) Tenant() *TenantService {
+	if c.tenant == nil {
+		c.tenant = &TenantService{http: c.http}
+	}
+	return c.tenant
 }
 
 // =====================================================================// Config returns the active SDK configuration.

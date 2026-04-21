@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+### Tenant lifecycle + identity invite wrappers (OlympusCloud/olympus-cloud-gcp#3403 §4.2 + §4.4)
+
+Typed wrappers for the canonical `/tenant/*` and `/identity/invite*` surface
+shipped by PR #3410. Replaces the raw `INSERT INTO tenants` hack in
+pizza-os `admin_app.dart:215` and the raw `createUser` loop in the
+onboarding wizard with one place every app can call.
+
+**New `TenantService` (accessed via `client.Tenant()`):**
+
+- `Create(ctx, TenantCreateRequest) (*TenantProvisionResult, error)` —
+  self-service signup. Idempotent on `IdempotencyKey` within a 24h window;
+  retries return the original tenant with `Idempotent: true`.
+- `Current(ctx) (*Tenant, error)` — read the caller's active tenant.
+- `Update(ctx, TenantUpdate) (*Tenant, error)` — patch brand/plan/billing/
+  locale/timezone (tenant_admin required).
+- `Retire(ctx, confirmationSlug) (*TenantRetireResult, error)` — soft-delete
+  with typed slug confirmation + MFA recency. Response carries
+  `PurgeEligibleAt` so UIs can show the "restore by" deadline.
+- `Unretire(ctx) (*TenantUnretireResult, error)` — reverse retire within the
+  30-day grace window.
+- `MyTenants(ctx) ([]TenantOption, error)` — list every tenant the caller
+  has access to (keyed on the JWT email claim).
+- `SwitchTenant(ctx, tenantID) (*ExchangedSession, error)` — mint a new
+  session scoped to a sibling tenant. Auto-installs the new access token on
+  the HTTP client; subsequent calls use the switched session.
+
+**New methods on `IdentityService`:**
+
+- `Invite(ctx, InviteCreateRequest) (*InviteHandle, error)` — create a
+  pending invite for an email + role. The signed invite-token JWT is
+  returned once here and stored as a SHA-256 hash server-side.
+- `AcceptInvite(ctx, inviteToken, firebaseIDToken) (*AuthSession, error)` —
+  exchange an invite + Firebase ID token for a full session. Auto-installs
+  the access token, same semantics as `AuthService.Login`.
+- `ListInvites(ctx) ([]InviteHandle, error)` — list pending/accepted/
+  revoked/expired invites for the caller's tenant (token hash only, never
+  echoed).
+- `RevokeInvite(ctx, inviteID) (*InviteHandle, error)` — idempotent cancel.
+- `RemoveFromTenant(ctx, userID, reason) (*RemoveFromTenantResult, error)`
+  — offboard a user from the caller's tenant. The Firebase identity and
+  any other-tenant links are preserved; only this tenant's auth_users row,
+  role assignments, and active sessions are revoked.
+
+**New types:** `Tenant`, `TenantCreateRequest`, `TenantFirstAdmin`,
+`TenantProvisionResult`, `TenantUpdate`, `TenantRetireResult`,
+`TenantUnretireResult`, `TenantOption`, `ExchangedSession`, `AppInstall`,
+`InviteCreateRequest`, `InviteHandle`, `InviteStatus`,
+`RemoveFromTenantResult`.
+
+**HTTP client:** new `getRaw`/`doRaw`/`handleResponseRaw` helpers return
+raw response bytes so list endpoints with bare JSON-array responses (e.g.
+`/tenant/mine`, `/identity/invites`) can decode directly into typed slices.
+Auth, retry, and stale-catalog semantics are unchanged.
+
 ### Silent token refresh + session events (OlympusCloud/olympus-cloud-gcp#3403 §1.4 / olympus-cloud-gcp#3412)
 
 In-SDK 401-at-TTL auto-resolution. A goroutine decodes the access-token

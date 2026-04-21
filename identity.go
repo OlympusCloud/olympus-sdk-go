@@ -2,7 +2,9 @@ package olympus
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // IdentityService is the Olympus ID surface — global, cross-tenant identity
@@ -165,4 +167,219 @@ func (s *IdentityService) SetPassphrase(ctx context.Context, phone, passphrase s
 // their ID photo.
 func (s *IdentityService) CreateUploadSession(ctx context.Context) (map[string]interface{}, error) {
 	return s.http.post(ctx, "/identity/create-upload-session", nil)
+}
+
+// ---------------------------------------------------------------------------
+// Identity invites (#3403 §4.2 + §4.4) — canonical /identity/invite* surface.
+//
+// Replaces the raw createUser loop in pizza-os onboarding. Gives every app
+// one place to invite staff/managers, list pending invites, accept/revoke
+// invites, and remove users from a tenant (Firebase identity preserved).
+//
+// Routes (backed by PR #3410):
+//   - POST /identity/invite                          — manager or tenant_admin
+//   - GET  /identity/invites                         — manager or tenant_admin
+//   - POST /identity/invites/:token/accept           — Firebase ID token body
+//   - POST /identity/invites/:id/revoke              — manager or tenant_admin
+//   - POST /identity/remove_from_tenant              — tenant_admin
+//
+// Invite tokens are short-lived JWTs (default 7d, capped at 30d) signed with
+// the platform JWT key. The token is returned only once — on InviteCreate —
+// and is SHA-256 hashed server-side for idempotent lookup on accept.
+// ---------------------------------------------------------------------------
+
+// InviteStatus mirrors the server enum. Snake-case on the wire.
+type InviteStatus string
+
+const (
+	// InviteStatusPending — created, not yet accepted or revoked.
+	InviteStatusPending InviteStatus = "pending"
+	// InviteStatusAccepted — recipient completed acceptance.
+	InviteStatusAccepted InviteStatus = "accepted"
+	// InviteStatusRevoked — invite owner cancelled the invite.
+	InviteStatusRevoked InviteStatus = "revoked"
+	// InviteStatusExpired — ttl_seconds elapsed before acceptance.
+	InviteStatusExpired InviteStatus = "expired"
+)
+
+// InviteCreateRequest is the body for Invite.
+//
+// Role must match docs/platform/roles.yaml — typically one of:
+// `tenant_admin`, `manager`, `staff`, `employee`, `viewer`, `accountant`,
+// `developer`. An unknown role returns 422 without any DB write.
+//
+// TTLSeconds defaults to 7d when zero, and is capped at 30d server-side.
+type InviteCreateRequest struct {
+	Email      string `json:"email"`
+	Role       string `json:"role"`
+	LocationID string `json:"location_id,omitempty"`
+	Message    string `json:"message,omitempty"`
+	TTLSeconds int64  `json:"ttl_seconds,omitempty"`
+}
+
+// InviteHandle is the invite envelope returned by Invite/ListInvites/RevokeInvite.
+//
+// Token is populated only on the Invite response — subsequent reads return
+// it as an empty string (the server stores only a SHA-256 hash).
+type InviteHandle struct {
+	ID         string       `json:"id"`
+	Token      string       `json:"token,omitempty"`
+	Email      string       `json:"email"`
+	Role       string       `json:"role"`
+	LocationID string       `json:"location_id,omitempty"`
+	TenantID   string       `json:"tenant_id"`
+	ExpiresAt  *time.Time   `json:"expires_at,omitempty"`
+	Status     InviteStatus `json:"status"`
+	CreatedAt  *time.Time   `json:"created_at,omitempty"`
+	AcceptedAt *time.Time   `json:"accepted_at,omitempty"`
+}
+
+// Invite creates a new pending invitation for `email` with `role`. Returns
+// the InviteHandle with the signed invite-token JWT set in `Token`.
+//
+// The caller must hold the `manager` or `tenant_admin` role on their current
+// tenant (server-enforced).
+//
+// Deliver the token to the invitee out-of-band (email, SMS, QR code). The
+// invitee accepts by POSTing their Firebase ID token to
+// `POST /identity/invites/:token/accept`, which this SDK exposes via
+// `AcceptInvite`.
+func (s *IdentityService) Invite(ctx context.Context, req InviteCreateRequest) (*InviteHandle, error) {
+	if req.Email == "" {
+		return nil, fmt.Errorf("olympus-sdk: Invite requires Email")
+	}
+	if req.Role == "" {
+		return nil, fmt.Errorf("olympus-sdk: Invite requires Role")
+	}
+	raw, err := s.http.post(ctx, "/identity/invite", req)
+	if err != nil {
+		return nil, err
+	}
+	var out InviteHandle
+	if err := remarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// AcceptInvite exchanges an invite token + the recipient's Firebase ID
+// token for a full AuthSession scoped to the invite's tenant + role.
+//
+// This is a login — on success the returned session's access token is
+// automatically installed on the HTTP client (same behaviour as
+// AuthService.Login).
+//
+// NOTE: AcceptInvite does NOT currently emit SessionLoggedIn events to
+// `AuthService.SessionEvents` subscribers, and it does NOT nudge the
+// silent-refresh goroutine. Callers using `StartSilentRefresh` should start
+// the goroutine AFTER the AcceptInvite call completes. See
+// olympus-cloud-gcp#3403 §4.2 follow-up for the event-plumbing issue.
+//
+// The Firebase token's email must match the invite's email (case-insensitive);
+// a mismatch bubbles as 403. Replay is blocked — an accepted, revoked, or
+// expired invite returns 400.
+func (s *IdentityService) AcceptInvite(ctx context.Context, inviteToken, firebaseIDToken string) (*AuthSession, error) {
+	if inviteToken == "" {
+		return nil, fmt.Errorf("olympus-sdk: AcceptInvite requires an invite token")
+	}
+	if firebaseIDToken == "" {
+		return nil, fmt.Errorf("olympus-sdk: AcceptInvite requires a Firebase ID token")
+	}
+	path := fmt.Sprintf("/identity/invites/%s/accept", inviteToken)
+	raw, err := s.http.post(ctx, path, map[string]interface{}{
+		"firebase_id_token": firebaseIDToken,
+	})
+	if err != nil {
+		return nil, err
+	}
+	session := parseAuthSession(raw)
+	if session.AccessToken != "" {
+		s.http.SetAccessToken(session.AccessToken)
+	}
+	return session, nil
+}
+
+// ListInvites returns every invite for the caller's current tenant, newest
+// first, capped at 500 by the server. The `Token` field is never populated
+// on listed invites — it's stored server-side as a SHA-256 hash only.
+//
+// Requires `manager` or `tenant_admin` role.
+func (s *IdentityService) ListInvites(ctx context.Context) ([]InviteHandle, error) {
+	body, err := s.http.getRaw(ctx, "/identity/invites", nil)
+	if err != nil {
+		return nil, err
+	}
+	// Try bare-array decode first (canonical backend shape), then envelope.
+	var out []InviteHandle
+	if err := json.Unmarshal(body, &out); err == nil {
+		return out, nil
+	}
+	var envelope struct {
+		Items []InviteHandle `json:"items"`
+		Data  []InviteHandle `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+	if len(envelope.Items) > 0 {
+		return envelope.Items, nil
+	}
+	return envelope.Data, nil
+}
+
+// RevokeInvite cancels a pending invite. Idempotent — revoking an already-
+// revoked or already-accepted invite returns the current state without
+// erroring. Requires `manager` or `tenant_admin` role.
+func (s *IdentityService) RevokeInvite(ctx context.Context, inviteID string) (*InviteHandle, error) {
+	if inviteID == "" {
+		return nil, fmt.Errorf("olympus-sdk: RevokeInvite requires an invite ID")
+	}
+	path := fmt.Sprintf("/identity/invites/%s/revoke", inviteID)
+	raw, err := s.http.post(ctx, path, map[string]interface{}{})
+	if err != nil {
+		return nil, err
+	}
+	var out InviteHandle
+	if err := remarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RemoveFromTenantResult is the response from RemoveFromTenant.
+type RemoveFromTenantResult struct {
+	TenantID  string     `json:"tenant_id"`
+	UserID    string     `json:"user_id"`
+	RemovedAt *time.Time `json:"removed_at,omitempty"`
+}
+
+// RemoveFromTenant offboards a user from the caller's current tenant. The
+// user's Firebase identity and any links to other tenants are preserved
+// (per #3403 §4.4); only the auth_users row + role assignments + active
+// sessions in this tenant are revoked.
+//
+// Requires `tenant_admin`. Removing yourself returns 400 — transfer admin
+// to another user first via an Invite + role assignment.
+//
+// `reason` is optional and, when set, is recorded on the audit event emitted
+// to Pub/Sub topic `platform.identity.removed_from_tenant`.
+func (s *IdentityService) RemoveFromTenant(ctx context.Context, userID, reason string) (*RemoveFromTenantResult, error) {
+	if userID == "" {
+		return nil, fmt.Errorf("olympus-sdk: RemoveFromTenant requires a user_id")
+	}
+	body := map[string]interface{}{
+		"user_id": userID,
+	}
+	if reason != "" {
+		body["reason"] = reason
+	}
+	raw, err := s.http.post(ctx, "/identity/remove_from_tenant", body)
+	if err != nil {
+		return nil, err
+	}
+	var out RemoveFromTenantResult
+	if err := remarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

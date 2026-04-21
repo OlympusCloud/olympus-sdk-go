@@ -96,6 +96,14 @@ func (h *httpClient) get(ctx context.Context, path string, query url.Values) (ma
 	return h.doJSON(ctx, http.MethodGet, path, query, nil)
 }
 
+// getRaw is like get, but returns the raw response body so callers can
+// decode into types other than map[string]interface{} (e.g. a bare JSON
+// array). Auth/retry/stale-catalog handling is identical to doJSON; only
+// the response decoding step is different.
+func (h *httpClient) getRaw(ctx context.Context, path string, query url.Values) ([]byte, error) {
+	return h.doRaw(ctx, http.MethodGet, path, query, nil)
+}
+
 func (h *httpClient) post(ctx context.Context, path string, body interface{}) (map[string]interface{}, error) {
 	return h.doJSON(ctx, http.MethodPost, path, nil, body)
 }
@@ -183,6 +191,96 @@ func (h *httpClient) doJSON(ctx context.Context, method, path string, query url.
 		return nil, lastErr
 	}
 	return nil, fmt.Errorf("olympus-sdk: request failed after %d retries", maxRetries)
+}
+
+// doRaw executes an HTTP request with identical auth/retry/stale-catalog
+// semantics to doJSON, but returns the raw response body instead of
+// unmarshaling into a map. Callers use this when the server returns a
+// top-level JSON array (e.g. GET /tenant/mine).
+func (h *httpClient) doRaw(ctx context.Context, method, path string, query url.Values, body interface{}) ([]byte, error) {
+	fullURL := h.baseURL + path
+	if len(query) > 0 {
+		fullURL += "?" + query.Encode()
+	}
+
+	var bodyReader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("olympus-sdk: failed to marshal request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(data)
+	}
+
+	maxRetries := h.config.effectiveMaxRetries()
+	baseDelay := h.config.effectiveRetryBaseDelay()
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+			if body != nil {
+				data, _ := json.Marshal(body)
+				bodyReader = bytes.NewReader(data)
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
+		if err != nil {
+			return nil, fmt.Errorf("olympus-sdk: failed to create request: %w", err)
+		}
+
+		h.applyHeaders(req)
+
+		resp, err := h.client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("olympus-sdk: request failed: %w", err)
+			continue
+		}
+
+		respBody, parseErr := h.handleResponseRaw(resp)
+		if parseErr != nil {
+			if apiErr, ok := parseErr.(*OlympusAPIError); ok {
+				if apiErr.IsRateLimited() || apiErr.IsServerError() {
+					lastErr = apiErr
+					continue
+				}
+			}
+			return nil, parseErr
+		}
+
+		return respBody, nil
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("olympus-sdk: request failed after %d retries", maxRetries)
+}
+
+// handleResponseRaw mirrors handleResponse but returns the raw body.
+func (h *httpClient) handleResponseRaw(resp *http.Response) ([]byte, error) {
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("olympus-sdk: failed to read response body: %w", err)
+	}
+
+	h.checkStaleCatalog(resp)
+
+	if resp.StatusCode >= 400 {
+		return nil, h.parseError(resp.StatusCode, respBody, resp.Header)
+	}
+	if resp.StatusCode == 204 || len(respBody) == 0 {
+		return []byte("null"), nil
+	}
+	return respBody, nil
 }
 
 // applyHeaders sets authentication and SDK headers on a request.
