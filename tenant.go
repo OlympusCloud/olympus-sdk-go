@@ -108,9 +108,15 @@ type ExchangedSession struct {
 	AccessExpiresAt *time.Time `json:"access_expires_at,omitempty"`
 }
 
-// AppInstall is the record emitted when /tenant/create auto-installs an app
-// from TenantCreateRequest.InstallApps.
-type AppInstall struct {
+// TenantAppInstall is the short record emitted when /tenant/create auto-installs
+// an app from TenantCreateRequest.InstallApps.
+//
+// NOTE: This is the SHORT shape returned inline by the tenant create handler —
+// only (app_id, status, installed_at). The canonical `AppInstall` name is now
+// owned by the fuller /apps/* ceremony shape in `apps.go` (#3413 §3). Renamed
+// 2026-04-21 to free the canonical name for the fuller shape; no stable release
+// shipped with the original name.
+type TenantAppInstall struct {
 	AppID       string     `json:"app_id"`
 	Status      string     `json:"status"`
 	InstalledAt *time.Time `json:"installed_at,omitempty"`
@@ -126,7 +132,7 @@ type TenantProvisionResult struct {
 	Tenant        Tenant           `json:"tenant"`
 	AdminUserID   string           `json:"admin_user_id,omitempty"`
 	Session       ExchangedSession `json:"session"`
-	InstalledApps []AppInstall     `json:"installed_apps,omitempty"`
+	InstalledApps []TenantAppInstall `json:"installed_apps,omitempty"`
 	Idempotent    bool             `json:"idempotent"`
 }
 

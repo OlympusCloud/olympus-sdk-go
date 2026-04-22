@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Apps install ceremony wrappers (OlympusCloud/olympus-cloud-gcp#3413 §3)
+
+Typed wrappers for the canonical `/apps/*` surface shipped by PR #3422. Gives
+every app one typed SDK entry point for the apps.install consent ceremony
+(pending install → consent → approve/deny → installed), listing installed
+apps, uninstall, and manifest fetches.
+
+**New `AppsService` (accessed via `client.Apps()`):**
+
+- `Install(ctx, AppInstallRequest) (*PendingInstall, error)` — initiate the
+  install ceremony. Returns a consent URL + 10-minute TTL. Idempotent on
+  `(tenant_id, app_id, idempotency_key)` within the window.
+- `ListInstalled(ctx) ([]AppInstall, error)` — list every active install on
+  the caller's tenant. Accepts bare-array or envelope-wrapped responses.
+- `Uninstall(ctx, appID) error` — soft-delete; emits
+  `platform.app.uninstalled` on Pub/Sub (auth service consumer revokes
+  sessions for that `(tenant_id, app_id)` pair).
+- `GetManifest(ctx, appID) (*AppManifest, error)` — fetch the latest
+  published manifest for an app.
+- `GetPendingInstall(ctx, pendingInstallID) (*PendingInstallDetail, error)`
+  — **anonymous**, no JWT required (the unguessable id is the bearer).
+  Returns 410 Gone on expiry. Eager-loads the manifest so the consent UI
+  does not need a second round-trip.
+- `ApprovePendingInstall(ctx, pendingInstallID) (*AppInstall, error)` —
+  tenant_admin approves the pending ceremony; returns the fresh install.
+- `DenyPendingInstall(ctx, pendingInstallID) error` — tenant_admin denies
+  the pending ceremony; server returns 204.
+
+**New types:** `AppInstallRequest`, `PendingInstall`, `PendingInstallDetail`,
+`AppInstall`, `AppManifest`.
+
+**Breaking (unreleased):** the short 3-field `AppInstall` shape returned
+inline by `POST /tenant/create` — used only by `TenantProvisionResult.InstalledApps`
+— is renamed to `TenantAppInstall` so the canonical `AppInstall` name can
+host the fuller `/apps/*` ceremony shape. No stable release has shipped with
+the original name, so external callers are unaffected.
+
 ### Tenant lifecycle + identity invite wrappers (OlympusCloud/olympus-cloud-gcp#3403 §4.2 + §4.4)
 
 Typed wrappers for the canonical `/tenant/*` and `/identity/invite*` surface
@@ -47,7 +84,8 @@ onboarding wizard with one place every app can call.
 
 **New types:** `Tenant`, `TenantCreateRequest`, `TenantFirstAdmin`,
 `TenantProvisionResult`, `TenantUpdate`, `TenantRetireResult`,
-`TenantUnretireResult`, `TenantOption`, `ExchangedSession`, `AppInstall`,
+`TenantUnretireResult`, `TenantOption`, `ExchangedSession`,
+`TenantAppInstall` (renamed from `AppInstall` by #3413 §3 — see above),
 `InviteCreateRequest`, `InviteHandle`, `InviteStatus`,
 `RemoveFromTenantResult`.
 

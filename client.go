@@ -64,6 +64,7 @@ type OlympusClient struct {
 	smartHome         *SmartHomeService
 	sms               *SMSService
 	tenant            *TenantService
+	apps              *AppsService
 
 	// Cached decoded JWT claims (lazy; invalidated on token change).
 	// Protected by cacheMu since *OlympusClient is shared across goroutines.
@@ -405,6 +406,19 @@ func (c *OlympusClient) Tenant() *TenantService {
 		c.tenant = &TenantService{http: c.http}
 	}
 	return c.tenant
+}
+
+// Apps returns the apps.install consent ceremony service (#3413 §3).
+//
+// Wraps the canonical /apps/* routes shipped in olympus-cloud-gcp#3422:
+// install, listInstalled, uninstall, getManifest, and the three
+// pending-install endpoints (get / approve / deny) that drive the
+// tenant_admin consent screen.
+func (c *OlympusClient) Apps() *AppsService {
+	if c.apps == nil {
+		c.apps = &AppsService{http: c.http}
+	}
+	return c.apps
 }
 
 // =====================================================================// Config returns the active SDK configuration.
