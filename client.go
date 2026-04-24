@@ -51,6 +51,7 @@ type OlympusClient struct {
 	enterpriseContext *EnterpriseContextService
 	messages          *MessagesService
 	voiceOrders       *VoiceOrdersService
+	voiceMarketplace  *VoiceMarketplaceService
 	adminEther        *AdminEtherService
 	adminCpaas        *AdminCpaasService
 	adminBilling      *AdminBillingService
@@ -279,6 +280,15 @@ func (c *OlympusClient) VoiceOrders() *VoiceOrdersService {
 	return c.voiceOrders
 }
 
+// VoiceMarketplace returns the voice-marketplace reviews service.
+// Issue #3463
+func (c *OlympusClient) VoiceMarketplace() *VoiceMarketplaceService {
+	if c.voiceMarketplace == nil {
+		c.voiceMarketplace = &VoiceMarketplaceService{http: c.http}
+	}
+	return c.voiceMarketplace
+}
+
 // AdminEther returns the Ether AI model catalog admin service.
 // Provides CRUD for models and tiers, plus hot-reload of the catalog cache.
 func (c *OlympusClient) AdminEther() *AdminEtherService {
@@ -421,7 +431,7 @@ func (c *OlympusClient) Apps() *AppsService {
 	return c.apps
 }
 
-// =====================================================================// Config returns the active SDK configuration.
+// Config returns the active SDK configuration.
 func (c *OlympusClient) Config() *Config {
 	return c.config
 }
