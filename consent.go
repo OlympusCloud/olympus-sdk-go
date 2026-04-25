@@ -21,13 +21,16 @@ type ConsentService struct {
 // ConsentPrompt is the server-rendered consent copy + stable hash.
 // The PromptHash must be echoed back on Grant calls so the server can
 // verify the user saw the current catalog copy.
+//
+// Shape matches GET /platform/consent-prompt (#3242).
 type ConsentPrompt struct {
+	AppID         string `json:"app_id"`
 	Scope         string `json:"scope"`
-	Description   string `json:"description"`
-	ConsentCopy   string `json:"consent_copy"`
+	PromptText    string `json:"prompt_text"`
 	PromptHash    string `json:"prompt_hash"`
 	IsDestructive bool   `json:"is_destructive"`
 	RequiresMFA   bool   `json:"requires_mfa"`
+	AppMayRequest bool   `json:"app_may_request"`
 }
 
 // Grant represents a row from platform_app_tenant_grants or
@@ -99,7 +102,7 @@ func (s *ConsentService) Describe(ctx context.Context, p DescribeParams) (*Conse
 	q := url.Values{}
 	q.Set("app_id", p.AppID)
 	q.Set("scope", p.Scope)
-	raw, err := s.http.get(ctx, "/api/v1/platform/consent-prompt", q)
+	raw, err := s.http.get(ctx, "/platform/consent-prompt", q)
 	if err != nil {
 		return nil, err
 	}
