@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.3 (2026-04-25)
+
+### Added — `oc.pay.ListRouting` (gcp#3312 pt2 → PR #3537)
+
+`PayService.ListRouting` wraps `GET /platform/pay/routing` (the list
+endpoint that landed in olympus-cloud-gcp PR #3537). Lists every payment-
+routing config for the caller's tenant with optional filters:
+
+```go
+result, err := oc.Pay().ListRouting(ctx, olympus.ListRoutingParams{
+    IsActive:    true,
+    IsActiveSet: true,
+    Processor:   olympus.PaymentProcessorSquare,
+    Limit:       50,
+})
+for _, cfg := range result.Configs {
+    fmt.Printf("%s -> %s\n", cfg.LocationID, cfg.PreferredProcessor)
+}
+fmt.Printf("returned %d configs\n", result.TotalReturned)
+```
+
+`RoutingConfigList` exposes `Configs []RoutingConfig` + `TotalReturned`
+so callers can detect when `Limit` capped the result. Backwards-compatible
+— existing `ConfigureRouting` / `GetRouting` wrappers unchanged.
+
+The `IsActiveSet` boolean (matching the existing `ConfigureRoutingParams`
+pattern) lets callers explicitly filter to inactive configs without zero-
+value ambiguity. When `IsActiveSet` is false the field is omitted from
+the query string and the server returns both active + inactive.
+
 ## Unreleased
 
 ### Apps install ceremony wrappers (OlympusCloud/olympus-cloud-gcp#3413 §3)

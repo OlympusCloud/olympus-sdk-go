@@ -297,3 +297,59 @@ func (s *PayService) GetRouting(ctx context.Context, p GetRoutingParams) (*Routi
 	}
 	return &out, nil
 }
+
+// ListRoutingParams controls ListRouting (#3312 pt2 → gcp PR #3537).
+//
+// All filters optional. IsActiveSet/IsActive lets callers explicitly
+// filter to is_active=false (without IsActiveSet, the field is omitted
+// and the server returns both active + inactive). Processor must be
+// one of the PaymentProcessor* constants when set; the server rejects
+// anything else with HTTP 400. Limit is clamped to 1..=200 server-side
+// and defaults to 100 when omitted (Limit=0 is treated as omitted).
+type ListRoutingParams struct {
+	IsActive    bool
+	IsActiveSet bool
+	Processor   string
+	Limit       int
+}
+
+// RoutingConfigList is the response from ListRouting (#3312 pt2).
+//
+// TotalReturned is the count of configs the server actually returned;
+// compare against the requested Limit to detect a capped response.
+type RoutingConfigList struct {
+	Configs       []RoutingConfig `json:"configs"`
+	TotalReturned int             `json:"total_returned"`
+}
+
+// ListRouting lists every routing config for the caller's tenant (#3312 pt2).
+//
+// Optional filters: IsActiveSet/IsActive, Processor (must be one of
+// olympus_pay/square/adyen/worldpay), Limit (1..=200). Server returns
+// configs ordered by location_id; pagination by location_id is on the
+// roadmap if any tenant exceeds 200 active locations.
+func (s *PayService) ListRouting(ctx context.Context, p ListRoutingParams) (*RoutingConfigList, error) {
+	q := url.Values{}
+	if p.IsActiveSet {
+		if p.IsActive {
+			q.Set("is_active", "true")
+		} else {
+			q.Set("is_active", "false")
+		}
+	}
+	if p.Processor != "" {
+		q.Set("processor", p.Processor)
+	}
+	if p.Limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", p.Limit))
+	}
+	raw, err := s.http.get(ctx, "/platform/pay/routing", q)
+	if err != nil {
+		return nil, err
+	}
+	var out RoutingConfigList
+	if err := remarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
