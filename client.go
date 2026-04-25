@@ -66,6 +66,7 @@ type OlympusClient struct {
 	sms               *SMSService
 	tenant            *TenantService
 	apps              *AppsService
+	compliance        *ComplianceService
 
 	// Cached decoded JWT claims (lazy; invalidated on token change).
 	// Protected by cacheMu since *OlympusClient is shared across goroutines.
@@ -429,6 +430,15 @@ func (c *OlympusClient) Apps() *AppsService {
 		c.apps = &AppsService{http: c.http}
 	}
 	return c.apps
+}
+
+// Compliance returns the cross-app compliance service (dram-shop ledger,
+// jurisdiction rules — #3316).
+func (c *OlympusClient) Compliance() *ComplianceService {
+	if c.compliance == nil {
+		c.compliance = &ComplianceService{http: c.http}
+	}
+	return c.compliance
 }
 
 // Config returns the active SDK configuration.
