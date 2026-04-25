@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -515,4 +516,123 @@ func containsStringDR(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// ----------------------------------------------------------------------------
+// PayService.ListRouting (#3312 pt2 → gcp PR #3537)
+// ----------------------------------------------------------------------------
+
+func TestListRouting_NoFiltersReturnsConfigs(t *testing.T) {
+	var capturedQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{
+			"configs": [
+				{"tenant_id":"ten-1","location_id":"loc-a","preferred_processor":"olympus_pay","fallback_processors":["square"],"is_active":true,"created_at":"2026-04-25T13:00:00Z","updated_at":"2026-04-25T13:00:00Z"},
+				{"tenant_id":"ten-1","location_id":"loc-b","preferred_processor":"square","fallback_processors":[],"credentials_secret_ref":"olympus-merchant-credentials-acme-square-dev","merchant_id":"sq-acct-7","is_active":true}
+			],
+			"total_returned": 2
+		}`))
+	}))
+	defer srv.Close()
+
+	oc := testClient(t, srv.URL)
+	result, err := oc.Pay().ListRouting(context.Background(), ListRoutingParams{})
+	if err != nil {
+		t.Fatalf("ListRouting: %v", err)
+	}
+	if capturedQuery != "" {
+		t.Errorf("expected empty query, got %q", capturedQuery)
+	}
+	if result.TotalReturned != 2 {
+		t.Errorf("TotalReturned = %d, want 2", result.TotalReturned)
+	}
+	if len(result.Configs) != 2 {
+		t.Fatalf("len(Configs) = %d, want 2", len(result.Configs))
+	}
+	if result.Configs[0].LocationID != "loc-a" {
+		t.Errorf("Configs[0].LocationID = %q, want loc-a", result.Configs[0].LocationID)
+	}
+	if result.Configs[1].MerchantID == nil || *result.Configs[1].MerchantID != "sq-acct-7" {
+		t.Errorf("Configs[1].MerchantID = %v, want sq-acct-7", result.Configs[1].MerchantID)
+	}
+}
+
+func TestListRouting_FiltersForwardedAsQueryParams(t *testing.T) {
+	var capturedQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"configs":[],"total_returned":0}`))
+	}))
+	defer srv.Close()
+
+	oc := testClient(t, srv.URL)
+	_, err := oc.Pay().ListRouting(context.Background(), ListRoutingParams{
+		IsActive:    false,
+		IsActiveSet: true,
+		Processor:   PaymentProcessorWorldpay,
+		Limit:       50,
+	})
+	if err != nil {
+		t.Fatalf("ListRouting: %v", err)
+	}
+	if got := capturedQuery.Get("is_active"); got != "false" {
+		t.Errorf("is_active = %q, want false", got)
+	}
+	if got := capturedQuery.Get("processor"); got != "worldpay" {
+		t.Errorf("processor = %q, want worldpay", got)
+	}
+	if got := capturedQuery.Get("limit"); got != "50" {
+		t.Errorf("limit = %q, want 50", got)
+	}
+}
+
+func TestListRouting_OmitsIsActiveWhenUnset(t *testing.T) {
+	// Without IsActiveSet=true, the field MUST be omitted (not "false") so
+	// the server returns both active + inactive configs. Inverse of the
+	// explicit-false test above.
+	var capturedQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"configs":[],"total_returned":0}`))
+	}))
+	defer srv.Close()
+
+	oc := testClient(t, srv.URL)
+	_, err := oc.Pay().ListRouting(context.Background(), ListRoutingParams{
+		Processor: PaymentProcessorOlympusPay,
+		Limit:     25,
+	})
+	if err != nil {
+		t.Fatalf("ListRouting: %v", err)
+	}
+	if capturedQuery.Has("is_active") {
+		t.Errorf("expected is_active to be omitted, got %q", capturedQuery.Get("is_active"))
+	}
+}
+
+func TestListRouting_EmptyResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"configs":[],"total_returned":0}`))
+	}))
+	defer srv.Close()
+	oc := testClient(t, srv.URL)
+	result, err := oc.Pay().ListRouting(context.Background(), ListRoutingParams{})
+	if err != nil {
+		t.Fatalf("ListRouting: %v", err)
+	}
+	if len(result.Configs) != 0 {
+		t.Errorf("expected empty Configs, got %d", len(result.Configs))
+	}
+	if result.TotalReturned != 0 {
+		t.Errorf("TotalReturned = %d, want 0", result.TotalReturned)
+	}
 }
