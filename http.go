@@ -372,6 +372,9 @@ func (h *httpClient) parseError(statusCode int, body []byte, headers http.Header
 		apiErr.Message = http.StatusText(statusCode)
 		return apiErr
 	}
+	// Preserve the raw body so typed-error dispatchers (e.g. Firebase
+	// federation) can extract domain-specific fields like `candidates`.
+	apiErr.Body = append([]byte(nil), body...)
 
 	var envelope errorResponse
 	envelopeHit := false
