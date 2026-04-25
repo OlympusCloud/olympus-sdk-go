@@ -5,4 +5,4 @@ package olympus
 // The authoritative tag is the git tag on the public module proxy
 // (e.g. v0.5.0); this constant is kept in sync so that runtime callers
 // and header emitters have a single source.
-const Version = "0.5.1"
+const Version = "0.5.2"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"time"
 )
 
 // PayService handles payment processing, refunds, balance, payouts, and terminal management.
@@ -179,4 +180,120 @@ func (s *PayService) CaptureTerminalPayment(ctx context.Context, readerID string
 		return nil, err
 	}
 	return parseTerminalPayment(resp), nil
+}
+
+// ----------------------------------------------------------------------------
+// Per-location payment routing (#3312)
+// ----------------------------------------------------------------------------
+
+// Supported payment processors. Both PreferredProcessor and the entries in
+// FallbackProcessors must be one of these — anything else is rejected
+// server-side with a 400. Mirrors the `SUPPORTED_PROCESSORS` slice in
+// backend/rust/platform/src/handlers/payment_routing.rs.
+const (
+	PaymentProcessorOlympusPay = "olympus_pay"
+	PaymentProcessorSquare     = "square"
+	PaymentProcessorAdyen      = "adyen"
+	PaymentProcessorWorldpay   = "worldpay"
+)
+
+// ConfigureRoutingParams controls ConfigureRouting.
+//
+// PreferredProcessor and FallbackProcessors entries must each be one of
+// the PaymentProcessor* constants. The fallback chain cannot include the
+// preferred processor.
+//
+// CredentialsSecretRef must be a Secret Manager secret NAME (not the
+// credential itself) starting with `olympus-merchant-credentials-` per
+// the canonical secrets schema (#2900). Plaintext API keys are rejected
+// at the server.
+//
+// IsActiveSet/IsActive lets callers explicitly send `is_active=false`.
+// When IsActiveSet is false, the field is omitted and the server default
+// (true) applies.
+type ConfigureRoutingParams struct {
+	LocationID            string
+	PreferredProcessor    string
+	FallbackProcessors    []string
+	CredentialsSecretRef  string
+	MerchantID            string
+	IsActive              bool
+	IsActiveSet           bool
+	Notes                 string
+}
+
+// GetRoutingParams controls GetRouting.
+type GetRoutingParams struct {
+	LocationID string
+}
+
+// RoutingConfig is the per-location processor routing config (#3312).
+//
+// Returned by both ConfigureRouting (echo + tenant_id) and GetRouting
+// (full row including server commit timestamps).
+type RoutingConfig struct {
+	TenantID             string     `json:"tenant_id"`
+	LocationID           string     `json:"location_id"`
+	PreferredProcessor   string     `json:"preferred_processor"`
+	FallbackProcessors   []string   `json:"fallback_processors"`
+	CredentialsSecretRef *string    `json:"credentials_secret_ref"`
+	MerchantID           *string    `json:"merchant_id"`
+	IsActive             bool       `json:"is_active"`
+	Notes                *string    `json:"notes"`
+	CreatedAt            *time.Time `json:"created_at"`
+	UpdatedAt            *time.Time `json:"updated_at"`
+}
+
+// ConfigureRouting upserts the per-location processor routing config (#3312).
+func (s *PayService) ConfigureRouting(ctx context.Context, p ConfigureRoutingParams) (*RoutingConfig, error) {
+	body := map[string]interface{}{
+		"location_id":         p.LocationID,
+		"preferred_processor": p.PreferredProcessor,
+	}
+	// Always send fallback_processors (server defaults to []) — pass the
+	// caller's slice as-is so an empty list explicitly clears the chain.
+	if p.FallbackProcessors != nil {
+		body["fallback_processors"] = p.FallbackProcessors
+	} else {
+		body["fallback_processors"] = []string{}
+	}
+	if p.CredentialsSecretRef != "" {
+		body["credentials_secret_ref"] = p.CredentialsSecretRef
+	}
+	if p.MerchantID != "" {
+		body["merchant_id"] = p.MerchantID
+	}
+	if p.IsActiveSet {
+		body["is_active"] = p.IsActive
+	}
+	if p.Notes != "" {
+		body["notes"] = p.Notes
+	}
+
+	raw, err := s.http.post(ctx, "/platform/pay/routing", body)
+	if err != nil {
+		return nil, err
+	}
+	var out RoutingConfig
+	if err := remarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetRouting reads the current routing config for a location (#3312).
+//
+// The location_id path segment is URL-escaped, so values containing
+// slashes or other reserved characters are safe to pass as-is.
+func (s *PayService) GetRouting(ctx context.Context, p GetRoutingParams) (*RoutingConfig, error) {
+	path := fmt.Sprintf("/platform/pay/routing/%s", url.PathEscape(p.LocationID))
+	raw, err := s.http.get(ctx, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out RoutingConfig
+	if err := remarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
