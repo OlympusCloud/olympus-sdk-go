@@ -15,6 +15,13 @@ type OlympusAPIError struct {
 
 	// RequestID is the server-assigned request identifier for debugging.
 	RequestID string `json:"request_id,omitempty"`
+
+	// Body is the raw response body bytes, populated by the HTTP layer when
+	// the response was a 4xx/5xx with a parseable JSON envelope. Typed-error
+	// dispatchers (e.g. mapFirebaseError) parse domain-specific fields out
+	// of Body — `candidates` for tenant-ambiguous 409s, `signup_url` for
+	// identity-unlinked 403s, etc. Empty when the response had no body.
+	Body []byte `json:"-"`
 }
 
 // Error implements the error interface.
