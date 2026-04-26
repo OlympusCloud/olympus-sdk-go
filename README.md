@@ -45,6 +45,19 @@ func main() {
 
     revenue, _ := client.Business().GetRevenueSummary(ctx)
     fmt.Println("Revenue:", revenue)
+
+    // Localize a platform error code in the user's preferred language.
+    // Manifest is fetched once and cached for 1 hour.
+    msg, _ := client.I18n().Localize(ctx, "ORDER_NOT_FOUND", "es")
+    fmt.Println(msg)
+
+    // Or localize a typed *OlympusAPIError directly.
+    if _, err := client.Commerce().GetOrder(ctx, "missing"); err != nil {
+        if apiErr, ok := err.(*olympus.OlympusAPIError); ok {
+            friendly, _ := client.I18n().LocalizeError(ctx, apiErr, "fr")
+            fmt.Println(friendly)
+        }
+    }
 }
 ```
 
@@ -58,6 +71,7 @@ func main() {
 | `client.Pay()` | Payments, refunds, terminal |
 | `client.Notify()` | Push, SMS, email |
 | `client.Events()` | Real-time events, webhooks |
+| `client.I18n()` | Error-code → localized message manifest (#3637) |
 | `client.Data()` | Query, CRUD, search |
 | `client.Storage()` | File upload, R2-backed |
 | `client.Marketplace()` | Apps marketplace |
