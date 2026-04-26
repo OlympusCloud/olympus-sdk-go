@@ -67,6 +67,7 @@ type OlympusClient struct {
 	tenant            *TenantService
 	apps              *AppsService
 	compliance        *ComplianceService
+	i18n              *I18nService
 
 	// Cached decoded JWT claims (lazy; invalidated on token change).
 	// Protected by cacheMu since *OlympusClient is shared across goroutines.
@@ -439,6 +440,18 @@ func (c *OlympusClient) Compliance() *ComplianceService {
 		c.compliance = &ComplianceService{http: c.http}
 	}
 	return c.compliance
+}
+
+// I18n returns the error-code i18n manifest consumer (#3637).
+//
+// Wraps GET /v1/i18n/errors with a 1-hour in-memory cache +
+// concurrent-fetch dedup. Use I18n().Localize(ctx, "CODE", "es") to
+// translate platform error codes without bundling per-app locale data.
+func (c *OlympusClient) I18n() *I18nService {
+	if c.i18n == nil {
+		c.i18n = &I18nService{http: c.http}
+	}
+	return c.i18n
 }
 
 // Config returns the active SDK configuration.
