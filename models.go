@@ -1,6 +1,10 @@
 package olympus
 
-import "time"
+import (
+	"encoding/json"
+	"sort"
+	"time"
+)
 
 // --------------------------------------------------------------------------
 // Auth models
@@ -42,6 +46,39 @@ type APIKey struct {
 	Scopes    []string   `json:"scopes,omitempty"`
 	CreatedAt *time.Time `json:"created_at,omitempty"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+// OlympusTeammate is a teammate listed by the Auth/Platform service.
+//
+// Returned by AuthService.ListTeammates. Mirrors the canonical Dart contract
+// shipped in olympus-sdk-dart#45 (W12-1 / olympus-cloud-gcp#3599).
+// AssignedScopes is a set so callers can do membership checks in O(1).
+type OlympusTeammate struct {
+	UserID         string              `json:"user_id"`
+	DisplayName    string              `json:"display_name"`
+	Role           string              `json:"role"`
+	AssignedScopes map[string]struct{} `json:"-"`
+}
+
+// MarshalJSON serialises AssignedScopes as a sorted string array on the wire.
+func (t OlympusTeammate) MarshalJSON() ([]byte, error) {
+	scopes := make([]string, 0, len(t.AssignedScopes))
+	for s := range t.AssignedScopes {
+		scopes = append(scopes, s)
+	}
+	sort.Strings(scopes)
+	type alias struct {
+		UserID         string   `json:"user_id"`
+		DisplayName    string   `json:"display_name"`
+		Role           string   `json:"role"`
+		AssignedScopes []string `json:"assigned_scopes"`
+	}
+	return json.Marshal(alias{
+		UserID:         t.UserID,
+		DisplayName:    t.DisplayName,
+		Role:           t.Role,
+		AssignedScopes: scopes,
+	})
 }
 
 // --------------------------------------------------------------------------

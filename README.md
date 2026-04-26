@@ -58,6 +58,24 @@ func main() {
             fmt.Println(friendly)
         }
     }
+
+    // Assign or revoke scopes for a teammate (W12-1 / gcp#3599).
+    // Caller MUST hold `platform.founder.roles.assign@tenant`.
+    if err := client.Auth().AssignRoles(ctx, olympus.AssignRolesRequest{
+        UserID:       "u-1",
+        TenantID:     "t-1",
+        GrantScopes:  []string{"commerce.order.write@tenant"},
+        RevokeScopes: []string{"platform.policy.write@tenant"},
+        Note:         "rotating ops on-call",
+    }); err != nil {
+        panic(err)
+    }
+
+    // List teammates the caller can manage.
+    teammates, _ := client.Auth().ListTeammates(ctx, olympus.ListTeammatesOptions{TenantID: "t-1"})
+    for _, t := range teammates {
+        fmt.Println(t.UserID, t.Role, len(t.AssignedScopes))
+    }
 }
 ```
 
