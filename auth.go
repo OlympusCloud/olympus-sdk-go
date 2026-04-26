@@ -2,7 +2,10 @@ package olympus
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
+	"sort"
 	"sync"
 )
 
@@ -144,6 +147,143 @@ func (s *AuthService) AssignRole(ctx context.Context, userID, role string) error
 		"role": role,
 	})
 	return err
+}
+
+// AssignRolesRequest is the input to AuthService.AssignRoles.
+//
+// Mirrors the canonical Dart contract shipped in olympus-sdk-dart#45 (W12-1 /
+// olympus-cloud-gcp#3599). GrantScopes / RevokeScopes are sets — duplicates
+// are removed and the wire payload is sorted for deterministic JSON.
+type AssignRolesRequest struct {
+	UserID       string
+	TenantID     string
+	GrantScopes  []string
+	RevokeScopes []string
+	Note         string // optional, omitted when empty
+}
+
+// AssignRoles assigns or revokes scopes for a user within a tenant.
+//
+// W12-1 / olympus-cloud-gcp#3599. Server-side: writes the scope mask, fires
+// the FCM topic the platform-side IntentBus broker subscribes to so every
+// open app on the target user's device sees an `identity.scopes.granted` /
+// `identity.scopes.revoked` CrossAppIntent.
+//
+// Errors (all surfaced as *OlympusAPIError):
+//   - 400 ROLES_VALIDATION_ERROR — empty grant + revoke sets, or unknown scope
+//   - 403 INSUFFICIENT_PERMISSIONS — caller lacks
+//     `platform.founder.roles.assign@tenant`
+//   - 404 USER_NOT_FOUND — UserID is not a member of TenantID
+func (s *AuthService) AssignRoles(ctx context.Context, req AssignRolesRequest) error {
+	body := map[string]interface{}{
+		"tenant_id":     req.TenantID,
+		"grant_scopes":  dedupSorted(req.GrantScopes),
+		"revoke_scopes": dedupSorted(req.RevokeScopes),
+	}
+	if req.Note != "" {
+		body["note"] = req.Note
+	}
+	_, err := s.http.post(
+		ctx,
+		fmt.Sprintf("/platform/users/%s/roles/assign", req.UserID),
+		body,
+	)
+	return err
+}
+
+// ListTeammatesOptions filters the result of AuthService.ListTeammates.
+type ListTeammatesOptions struct {
+	// TenantID, when non-empty, restricts results to teammates of the given
+	// tenant. When empty the server returns teammates the caller can manage
+	// across all tenants they hold the assignment scope in.
+	TenantID string
+}
+
+// ListTeammates lists teammates the caller can manage.
+//
+// Server-side filters by caller's `platform.founder.roles.assign` scope.
+// Mirrors the canonical Dart contract shipped in olympus-sdk-dart#45
+// (W12-1 / olympus-cloud-gcp#3599).
+func (s *AuthService) ListTeammates(ctx context.Context, opts ListTeammatesOptions) ([]OlympusTeammate, error) {
+	var query url.Values
+	if opts.TenantID != "" {
+		query = url.Values{}
+		query.Set("tenant_id", opts.TenantID)
+	}
+	// The server may return either { "data": [...] } or a bare array. Try
+	// the envelope first (cheap path) and fall back to raw decode otherwise.
+	resp, err := s.http.get(ctx, "/platform/teammates", query)
+	if err == nil {
+		if rows, ok := resp["data"].([]interface{}); ok {
+			return parseTeammates(rows), nil
+		}
+	}
+	// Bare-array path.
+	raw, rawErr := s.http.getRaw(ctx, "/platform/teammates", query)
+	if rawErr != nil {
+		// Prefer the structured envelope error if both paths fail.
+		if err != nil {
+			return nil, err
+		}
+		return nil, rawErr
+	}
+	var rows []map[string]interface{}
+	if jsonErr := json.Unmarshal(raw, &rows); jsonErr != nil {
+		// Maybe it was an envelope after all.
+		if err != nil {
+			return nil, err
+		}
+		return nil, jsonErr
+	}
+	out := make([]OlympusTeammate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, parseTeammate(r))
+	}
+	return out, nil
+}
+
+// dedupSorted returns a new slice with duplicates removed and entries sorted
+// in ascending order. Returns an empty (non-nil) slice when the input is nil
+// so the JSON wire payload always carries `[]` instead of `null`.
+func dedupSorted(in []string) []string {
+	if len(in) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func parseTeammates(rows []interface{}) []OlympusTeammate {
+	out := make([]OlympusTeammate, 0, len(rows))
+	for _, raw := range rows {
+		if m, ok := raw.(map[string]interface{}); ok {
+			out = append(out, parseTeammate(m))
+		}
+	}
+	return out
+}
+
+func parseTeammate(data map[string]interface{}) OlympusTeammate {
+	scopes := getStringSlice(data, "assigned_scopes")
+	set := make(map[string]struct{}, len(scopes))
+	for _, s := range scopes {
+		set[s] = struct{}{}
+	}
+	return OlympusTeammate{
+		UserID:         getString(data, "user_id"),
+		DisplayName:    getString(data, "display_name"),
+		Role:           getString(data, "role"),
+		AssignedScopes: set,
+	}
 }
 
 // CheckPermission checks whether a user has a specific permission.
